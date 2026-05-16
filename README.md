@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="bmo.png">
-    <img src="bmo.png" width="360" alt="BMO">
-  </picture>
+  <img src="bmo.png" width="360" alt="BMO">
 </p>
 
 <h1 align="center">bmo</h1>
@@ -24,7 +21,7 @@ bmo doctor
 
 ## What It Does
 
-`bmo` installs standalone [Claude Code](https://claude.ai) skills. A skill is a folder containing a `SKILL.md` file.
+`bmo` installs standalone [Claude Code](https://claude.com/claude-code) skills. A skill is a folder containing a `SKILL.md` file.
 
 It resolves a source (GitHub repo, local path, or zip URL), finds installable skill folders, validates the `SKILL.md` frontmatter, copies the selected folder into Claude Code's skills directory, and records metadata so the skill can be listed, updated, or removed later.
 
