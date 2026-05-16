@@ -11,7 +11,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// maxArchiveBytes caps the size of a downloaded or extracted archive to guard
+// against unbounded downloads and decompression bombs.
+const maxArchiveBytes = 256 << 20 // 256 MiB
+
+var httpClient = &http.Client{Timeout: 2 * time.Minute}
 
 type SourceType string
 
@@ -131,14 +138,16 @@ func resolveGitHubSource(src Source) (ResolvedSource, error) {
 		return sourceWithSubpath(src, root, tmp)
 	}
 	root, err := downloadAndExtract(fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/main.zip", src.Owner, src.Repo), tmp)
+	chosenRef := "main"
 	if err != nil {
 		root, err = downloadAndExtract(fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/master.zip", src.Owner, src.Repo), tmp)
+		chosenRef = "master"
 	}
 	if err != nil {
 		os.RemoveAll(tmp)
 		return ResolvedSource{}, err
 	}
-	src.Ref = "main"
+	src.Ref = chosenRef
 	return sourceWithSubpath(src, root, tmp)
 }
 
@@ -160,18 +169,29 @@ func sourceWithSubpath(src Source, root, tmp string) (ResolvedSource, error) {
 		return ResolvedSource{Source: src, Root: root, Temp: tmp}, nil
 	}
 	candidate := filepath.Join(root, src.SubPath)
-	info, err := os.Stat(candidate)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return ResolvedSource{}, err
+	}
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return ResolvedSource{}, err
+	}
+	if absCandidate != absRoot && !strings.HasPrefix(absCandidate, absRoot+string(os.PathSeparator)) {
+		return ResolvedSource{}, fmt.Errorf("source path escapes the repository: %s", src.SubPath)
+	}
+	info, err := os.Stat(absCandidate)
 	if err != nil {
 		return ResolvedSource{}, fmt.Errorf("source path not found: %s", src.SubPath)
 	}
 	if !info.IsDir() {
 		return ResolvedSource{}, fmt.Errorf("source path is not a directory: %s", src.SubPath)
 	}
-	return ResolvedSource{Source: src, Root: candidate, Temp: tmp}, nil
+	return ResolvedSource{Source: src, Root: absCandidate, Temp: tmp}, nil
 }
 
 func downloadAndExtract(rawURL, dest string) (string, error) {
-	resp, err := http.Get(rawURL)
+	resp, err := httpClient.Get(rawURL)
 	if err != nil {
 		return "", err
 	}
@@ -184,9 +204,14 @@ func downloadAndExtract(rawURL, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	written, err := io.Copy(out, io.LimitReader(resp.Body, maxArchiveBytes+1))
+	if err != nil {
 		out.Close()
 		return "", err
+	}
+	if written > maxArchiveBytes {
+		out.Close()
+		return "", fmt.Errorf("download exceeds %d bytes: %s", maxArchiveBytes, rawURL)
 	}
 	if err := out.Close(); err != nil {
 		return "", err
@@ -211,6 +236,7 @@ func unzip(zipPath, dest string) error {
 	if err := os.MkdirAll(cleanDest, 0o755); err != nil {
 		return err
 	}
+	var extracted int64
 	for _, file := range reader.File {
 		target := filepath.Join(cleanDest, file.Name)
 		cleanTarget, err := filepath.Abs(target)
@@ -238,7 +264,7 @@ func unzip(zipPath, dest string) error {
 			src.Close()
 			return err
 		}
-		_, copyErr := io.Copy(dst, src)
+		n, copyErr := io.Copy(dst, io.LimitReader(src, maxArchiveBytes-extracted+1))
 		closeErr := dst.Close()
 		src.Close()
 		if copyErr != nil {
@@ -246,6 +272,10 @@ func unzip(zipPath, dest string) error {
 		}
 		if closeErr != nil {
 			return closeErr
+		}
+		extracted += n
+		if extracted > maxArchiveBytes {
+			return fmt.Errorf("archive expands beyond %d bytes", maxArchiveBytes)
 		}
 	}
 	return nil

@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,8 +237,8 @@ func newUpdateCommand(opts *options) *cobra.Command {
 		Use:   "update SKILL_NAME",
 		Short: "Update installed skills from their original source",
 		Args: func(cmd *cobra.Command, args []string) error {
-			if opts.all && len(args) == 0 {
-				return nil
+			if opts.all {
+				return cobra.NoArgs(cmd, args)
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
@@ -330,11 +332,11 @@ func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, scope
 
 func confirm(cmd *cobra.Command, prompt string) (bool, error) {
 	fmt.Fprint(cmd.OutOrStdout(), prompt)
-	var answer string
-	if _, err := fmt.Fscan(cmd.InOrStdin(), &answer); err != nil {
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && err != io.EOF {
 		return false, err
 	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
+	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes", nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -87,7 +88,7 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 }
 
 func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
-	_, metadataPath, err := ScopePaths(scope, cwd)
+	skillsDir, metadataPath, err := ScopePaths(scope, cwd)
 	if err != nil {
 		return SkillMeta{}, err
 	}
@@ -99,6 +100,9 @@ func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
 	if !ok {
 		return SkillMeta{}, fmt.Errorf("skill is not tracked by bmo: %s", name)
 	}
+	if err := withinDir(skillsDir, entry.InstalledPath); err != nil {
+		return SkillMeta{}, fmt.Errorf("refusing to remove %s: %w", name, err)
+	}
 	if err := os.RemoveAll(entry.InstalledPath); err != nil {
 		return SkillMeta{}, err
 	}
@@ -107,6 +111,25 @@ func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
 		return SkillMeta{}, err
 	}
 	return entry, nil
+}
+
+// withinDir reports an error unless target resolves to a path inside parent.
+func withinDir(parent, target string) error {
+	if target == "" {
+		return errors.New("path is empty")
+	}
+	absParent, err := filepath.Abs(parent)
+	if err != nil {
+		return err
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	if absTarget != absParent && !strings.HasPrefix(absTarget, absParent+string(os.PathSeparator)) {
+		return fmt.Errorf("path %s is outside %s", absTarget, absParent)
+	}
+	return nil
 }
 
 func CopyDir(src, dest string) error {
@@ -130,6 +153,9 @@ func CopyDir(src, dest string) error {
 		}
 		target := filepath.Join(dest, rel)
 		if d.IsDir() {
+			if path != src && ignoredDirs[d.Name()] {
+				return filepath.SkipDir
+			}
 			return os.MkdirAll(target, 0o755)
 		}
 		info, err := d.Info()
