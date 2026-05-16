@@ -64,7 +64,32 @@ func ParseSource(raw string) (Source, error) {
 		}
 		return Source{Raw: raw, Type: SourceZipURL, URL: raw}, nil
 	}
+	if looksLikeGitHubShorthand(raw) {
+		src, err := parseGitHubSource("github:" + raw)
+		if err != nil {
+			return Source{}, err
+		}
+		src.Raw = raw
+		return src, nil
+	}
 	return Source{Raw: raw, Type: SourceLocal, LocalDir: raw}, nil
+}
+
+// looksLikeGitHubShorthand reports whether raw is a bare owner/repo[/path][@ref]
+// GitHub reference. Local relative paths must use a ./ or ../ prefix.
+func looksLikeGitHubShorthand(raw string) bool {
+	if strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, ".") || strings.HasPrefix(raw, "~") {
+		return false
+	}
+	body := raw
+	if i := strings.LastIndex(body, "@"); i >= 0 {
+		body = body[:i]
+	}
+	parts := strings.Split(body, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	return githubPartRE.MatchString(parts[0]) && githubPartRE.MatchString(parts[1])
 }
 
 func parseGitHubSource(raw string) (Source, error) {

@@ -11,8 +11,8 @@
 </p>
 
 ```bash
-bmo add github:owner/repo
-bmo inspect github:owner/repo
+bmo add owner/repo
+bmo inspect owner/repo
 bmo list
 bmo update --all
 bmo remove skill-name
@@ -55,13 +55,13 @@ go build -o bmo .
 
 ```bash
 # Inspect a skill before installing
-bmo inspect github:owner/repo
+bmo inspect owner/repo
 
 # Install a skill globally
-bmo add github:owner/repo
+bmo add owner/repo
 
 # Install to the current project instead
-bmo add --project github:owner/repo
+bmo add --project owner/repo
 
 # List installed skills
 bmo list
@@ -100,12 +100,14 @@ bmo add SOURCE [--project] [--name NAME] [--force] [--yes] [--dry-run]
 
 | Format | Example |
 |--------|---------|
-| GitHub repo | `github:owner/repo` |
-| GitHub with subpath | `github:owner/repo/path/to/skill` |
-| GitHub with ref | `github:owner/repo@v1.0.0` |
-| GitHub with subpath + ref | `github:owner/repo/path@branch` |
+| GitHub repo | `owner/repo` or `github:owner/repo` |
+| GitHub with subpath | `owner/repo/path/to/skill` |
+| GitHub with ref | `owner/repo@v1.0.0` |
+| GitHub with subpath + ref | `owner/repo/path@branch` |
 | Local directory | `./path/to/skill` |
 | Zip URL | `https://example.com/skill.zip` |
+
+The `github:` prefix is optional — a bare `owner/repo` is treated as GitHub. Local relative paths must use a `./` (or `../`) prefix so they aren't mistaken for a repo.
 
 When no ref is specified, bmo tries `main` first, then falls back to `master`.
 
