@@ -248,9 +248,3 @@ go test -v ./...
 # Build
 go build -o bmo .
 ```
-
----
-
-## License
-
-[MIT](LICENSE)
