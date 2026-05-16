@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="bmo.png">
-    <img src="bmo.png" width="400" alt="BMO">
+    <img src="bmo.png" width="360" alt="BMO">
   </picture>
 </p>
 
