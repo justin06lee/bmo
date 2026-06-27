@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,14 +12,13 @@ import (
 )
 
 type InstallOptions struct {
-	Scope   Scope
-	Name    string
-	Force   bool
-	DryRun  bool
-	CWD     string
-	Source  Source
-	Skill   Skill
-	Verbose bool
+	Scope  Scope
+	Name   string
+	Force  bool
+	DryRun bool
+	CWD    string
+	Source Source
+	Skill  Skill
 }
 
 func InstallSkill(opts InstallOptions) (SkillMeta, error) {
@@ -54,7 +54,7 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 		return next, nil
 	}
 	if _, err := os.Stat(dest); err == nil && !opts.Force {
-		return SkillMeta{}, fmt.Errorf("Skill already installed: %s\nUse --force to replace it.", skill.Name)
+		return SkillMeta{}, fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
 	}
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return SkillMeta{}, err
@@ -157,6 +157,9 @@ func CopyDir(src, dest string) error {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(target, 0o755)
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to copy symlink: %s", path)
 		}
 		info, err := d.Info()
 		if err != nil {

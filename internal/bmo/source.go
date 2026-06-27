@@ -23,9 +23,10 @@ var httpClient = &http.Client{Timeout: 2 * time.Minute}
 type SourceType string
 
 const (
-	SourceGitHub SourceType = "github"
-	SourceLocal  SourceType = "local"
-	SourceZipURL SourceType = "zip"
+	SourceGitHub   SourceType = "github"
+	SourceLocal    SourceType = "local"
+	SourceZipURL   SourceType = "zip"
+	SourceEmbedded SourceType = "embedded"
 )
 
 type Source struct {
@@ -50,6 +51,9 @@ var githubPartRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 func ParseSource(raw string) (Source, error) {
 	if raw == "" {
 		return Source{}, errors.New("source is required")
+	}
+	if IsEmbeddedSource(raw) {
+		return Source{Raw: EmbeddedSkillName, Type: SourceEmbedded}, nil
 	}
 	if strings.HasPrefix(raw, "github:") {
 		return parseGitHubSource(raw)
@@ -143,6 +147,12 @@ func ResolveSource(src Source) (ResolvedSource, error) {
 		return resolveGitHubSource(src)
 	case SourceZipURL:
 		return resolveZipURL(src)
+	case SourceEmbedded:
+		root, err := materializeEmbedded()
+		if err != nil {
+			return ResolvedSource{}, err
+		}
+		return ResolvedSource{Source: src, Root: root, Temp: root}, nil
 	default:
 		return ResolvedSource{}, errors.New("unsupported source type")
 	}

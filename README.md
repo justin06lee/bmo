@@ -17,6 +17,9 @@ bmo list
 bmo update --all
 bmo remove skill-name
 bmo doctor
+
+bmo init       # install the skill bmo ships with
+bmo add bmo    # ...or restore it if you deleted it
 ```
 
 ## What It Does
@@ -24,6 +27,30 @@ bmo doctor
 `bmo` installs standalone [Claude Code](https://claude.com/claude-code) skills. A skill is a folder containing a `SKILL.md` file.
 
 It resolves a source (GitHub repo, local path, or zip URL), finds installable skill folders, validates the `SKILL.md` frontmatter, copies the selected folder into Claude Code's skills directory, and records metadata so the skill can be listed, updated, or removed later.
+
+## The bundled `bmo` skill
+
+`bmo` ships with its own tiny Claude Code skill baked into the binary (the
+`skills/bmo/` folder, embedded at build time). It teaches Claude Code how to
+drive `bmo` — installing, inspecting, listing, updating, and removing skills —
+so you can just ask Claude to manage your skills in plain language.
+
+You don't have to install it by hand. **The first time you run any `bmo`
+command, bmo installs the `bmo` skill globally** (once) and prints a one-line
+note. A sentinel at `~/.bmo/.bootstrapped` records that this happened, so it
+won't fight you if you later remove it.
+
+You can also manage it explicitly:
+
+```bash
+bmo init       # install (or refresh) the bundled bmo skill
+bmo add bmo    # the same thing — restore it if you deleted the folder
+bmo add self   # alias for `bmo add bmo`
+```
+
+Because the skill is embedded in the binary, `bmo init` / `bmo add bmo` work
+**fully offline** — no GitHub clone, no network. `bmo add bmo` is the answer to
+"I accidentally deleted the skill, how do I get it back?"
 
 ## What It Is Not
 
@@ -74,6 +101,9 @@ bmo remove skill-name
 
 # Run diagnostics
 bmo doctor
+
+# (Re)install the skill bmo ships with — also runs automatically on first use
+bmo init
 ```
 
 ---
@@ -106,10 +136,26 @@ bmo add SOURCE [--project] [--name NAME] [--force] [--yes] [--dry-run]
 | GitHub with subpath + ref | `owner/repo/path@branch` |
 | Local directory | `./path/to/skill` |
 | Zip URL | `https://example.com/skill.zip` |
+| The bundled bmo skill | `bmo` (or `self`) — installs the embedded skill, offline |
 
 The `github:` prefix is optional — a bare `owner/repo` is treated as GitHub. Local relative paths must use a `./` (or `../`) prefix so they aren't mistaken for a repo.
 
 When no ref is specified, bmo tries `main` first, then falls back to `master`.
+
+### `init`
+
+Install the `bmo` skill that ships bundled inside the binary.
+
+```bash
+bmo init [--project]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--project` | Install into the current project's `.claude/skills/` instead of globally |
+
+This is the explicit form of the first-run auto-install. It works offline and
+refreshes the skill if it's already installed. `bmo add bmo` does the same thing.
 
 ### `inspect`
 
@@ -214,6 +260,13 @@ Both scopes can coexist. A skill name collision across scopes triggers a warning
 **`bmo` copies files only.** It never executes downloaded code, runs install scripts, or invokes package managers.
 
 When a skill contains files with executable extensions (`.py`, `.sh`, `.js`, `.rb`, etc.) or notable dependency files (`requirements.txt`, `package.json`, `Cargo.toml`, etc.), bmo prints a warning before installation so you can review what you're installing.
+
+Additional hardening:
+
+- **Zip-slip protection** — entries in downloaded archives that resolve outside the extraction directory are rejected.
+- **Size caps** — downloads and extracted archives are bounded (256 MiB) to guard against decompression bombs.
+- **No symlink following** — `bmo` refuses to copy symlinks when installing a skill, so a skill folder can't read files outside its tree.
+- **Scoped removal** — `bmo remove` refuses to delete anything outside the managed skills directory.
 
 ---
 

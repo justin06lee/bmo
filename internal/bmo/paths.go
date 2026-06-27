@@ -39,6 +39,17 @@ func ProjectMetadataPath(cwd string) string {
 	return filepath.Join(cwd, ".claude", "bmo-lock.json")
 }
 
+// BootstrapMarkerPath returns the sentinel file that records the one-time
+// first-run install of the bundled bmo skill. Its presence stops bmo from
+// re-installing the skill on every invocation (so `bmo remove bmo` sticks).
+func BootstrapMarkerPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".bmo", ".bootstrapped"), nil
+}
+
 func ScopePaths(scope Scope, cwd string) (skillsDir string, metadataPath string, err error) {
 	if scope == ScopeProject {
 		return ProjectSkillsDir(cwd), ProjectMetadataPath(cwd), nil
