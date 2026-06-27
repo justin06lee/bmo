@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/justin06lee/bmo/internal/bmo"
 	"github.com/spf13/cobra"
@@ -31,8 +32,14 @@ func NewRootCommand() *cobra.Command {
 		Use:          "bmo",
 		Short:        "A tiny installer for Claude Code skills",
 		SilenceUsage: true,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if shouldBootstrap(cmd, args) {
+				bootstrapBmoSkill(cmd)
+			}
+		},
 	}
 	root.AddCommand(newAddCommand(opts))
+	root.AddCommand(newInitCommand(opts))
 	root.AddCommand(newInspectCommand())
 	root.AddCommand(newListCommand(opts))
 	root.AddCommand(newRemoveCommand(opts))
@@ -111,6 +118,30 @@ func newAddCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.force, "force", false, "Replace an existing installed skill")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would happen without copying files")
+	return cmd
+}
+
+func newInitCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Install the bundled bmo skill into Claude Code",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			scope := selectedScope(opts)
+			meta, err := installBmoSkill(scope, cwd, true)
+			if err != nil {
+				return err
+			}
+			markBootstrapped()
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in Claude Code:\n  /%s\n", meta.Name, meta.InstalledPath, meta.Name)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into ./.claude/skills")
 	return cmd
 }
 
@@ -338,6 +369,95 @@ func confirm(cmd *cobra.Command, prompt string) (bool, error) {
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes", nil
+}
+
+// installBmoSkill installs the bundled bmo skill from the embedded copy.
+func installBmoSkill(scope bmo.Scope, cwd string, force bool) (bmo.SkillMeta, error) {
+	src, err := bmo.ParseSource(bmo.EmbeddedSkillName)
+	if err != nil {
+		return bmo.SkillMeta{}, err
+	}
+	resolved, err := bmo.ResolveSource(src)
+	if err != nil {
+		return bmo.SkillMeta{}, err
+	}
+	defer cleanupResolved(resolved)
+	skill, err := selectSkill(resolved.Root, "")
+	if err != nil {
+		return bmo.SkillMeta{}, err
+	}
+	return bmo.InstallSkill(bmo.InstallOptions{
+		Scope:  scope,
+		Force:  force,
+		CWD:    cwd,
+		Source: resolved.Source,
+		Skill:  skill,
+	})
+}
+
+// shouldBootstrap reports whether the one-time first-run install should run for
+// this command. It is skipped for the commands that install the skill
+// themselves, to avoid a redundant double install.
+func shouldBootstrap(cmd *cobra.Command, args []string) bool {
+	switch cmd.Name() {
+	case "init":
+		return false
+	case "add":
+		if len(args) == 1 && bmo.IsEmbeddedSource(args[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+// bootstrapBmoSkill installs the bundled bmo skill once, the first time bmo is
+// run. A sentinel file records that it happened so a later `bmo remove bmo`
+// sticks. All failures are non-fatal — bmo should still run without it.
+func bootstrapBmoSkill(cmd *cobra.Command) {
+	marker, err := bmo.BootstrapMarkerPath()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(marker); err == nil {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	if !bmoSkillTracked(cwd) {
+		if meta, err := installBmoSkill(bmo.ScopeGlobal, cwd, false); err == nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "bmo: installed the bmo skill to %s (run `bmo remove bmo` to undo)\n", meta.InstalledPath)
+		}
+	}
+	markBootstrapped()
+}
+
+// bmoSkillTracked reports whether the bmo skill is already recorded in global
+// metadata.
+func bmoSkillTracked(cwd string) bool {
+	path, err := bmo.GlobalMetadataPath()
+	if err != nil {
+		return false
+	}
+	meta, err := bmo.ReadMetadata(path)
+	if err != nil {
+		return false
+	}
+	_, ok := meta.Skills[bmo.EmbeddedSkillName]
+	return ok
+}
+
+// markBootstrapped writes the sentinel file recording the one-time install.
+func markBootstrapped() {
+	marker, err := bmo.BootstrapMarkerPath()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		return
+	}
+	os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
 
 func cleanupResolved(resolved bmo.ResolvedSource) {

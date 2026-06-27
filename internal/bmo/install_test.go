@@ -71,3 +71,29 @@ func TestRemoveInstalledSkill(t *testing.T) {
 		t.Fatalf("expected removed path, got %v", err)
 	}
 }
+
+func TestWithinDir(t *testing.T) {
+	cases := []struct {
+		name    string
+		parent  string
+		target  string
+		wantErr bool
+	}{
+		{name: "inside", parent: "/a/b", target: "/a/b/c", wantErr: false},
+		{name: "equal", parent: "/a/b", target: "/a/b", wantErr: false},
+		{name: "outside", parent: "/a/b", target: "/a/c", wantErr: true},
+		{name: "sibling-prefix", parent: "/a/b", target: "/a/bc", wantErr: true},
+		{name: "empty target", parent: "/a/b", target: "", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := withinDir(tc.parent, tc.target)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for parent=%q target=%q, got nil", tc.parent, tc.target)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for parent=%q target=%q: %v", tc.parent, tc.target, err)
+			}
+		})
+	}
+}
