@@ -50,15 +50,19 @@ func NewRootCommand() *cobra.Command {
 
 func newAddCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add SOURCE",
+		Use:   "add SOURCE [here|everywhere]",
 		Short: "Install a Claude Code skill",
-		Args:  cobra.ExactArgs(1),
+		Args:  argsWithKeyword(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			scope := selectedScope(opts)
+			args, keyword, err := splitScopeKeyword(args)
+			if err != nil {
+				return err
+			}
+			scope := keywordScope(keyword, opts)
 			src, err := bmo.ParseSource(args[0])
 			if err != nil {
 				return err
@@ -123,15 +127,19 @@ func newAddCommand(opts *options) *cobra.Command {
 
 func newInitCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "init",
+		Use:   "init [here|everywhere]",
 		Short: "Install the bundled bmo skill into Claude Code",
-		Args:  cobra.NoArgs,
+		Args:  argsWithKeyword(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			scope := selectedScope(opts)
+			_, keyword, err := splitScopeKeyword(args)
+			if err != nil {
+				return err
+			}
+			scope := keywordScope(keyword, opts)
 			meta, err := installBmoSkill(scope, cwd, true)
 			if err != nil {
 				return err
@@ -189,13 +197,19 @@ func newInspectCommand() *cobra.Command {
 
 func newListCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   "list [here|everywhere]",
 		Short: "List installed skills tracked by bmo",
+		Args:  argsWithKeyword(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
+			_, keyword, err := splitScopeKeyword(args)
+			if err != nil {
+				return err
+			}
+			applyKeywordFilter(keyword, opts)
 			entries, err := listEntries(cwd, opts)
 			if err != nil {
 				return err
@@ -218,15 +232,19 @@ func newListCommand(opts *options) *cobra.Command {
 
 func newRemoveCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "remove SKILL_NAME",
+		Use:   "remove SKILL_NAME [here|everywhere]",
 		Short: "Remove an installed skill",
-		Args:  cobra.ExactArgs(1),
+		Args:  argsWithKeyword(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			scope := selectedScope(opts)
+			args, keyword, err := splitScopeKeyword(args)
+			if err != nil {
+				return err
+			}
+			scope := keywordScope(keyword, opts)
 			_, metadataPath, err := bmo.ScopePaths(scope, cwd)
 			if err != nil {
 				return err
@@ -265,19 +283,24 @@ func newRemoveCommand(opts *options) *cobra.Command {
 
 func newUpdateCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "update SKILL_NAME",
+		Use:   "update SKILL_NAME [here|everywhere]",
 		Short: "Update installed skills from their original source",
-		Args: func(cmd *cobra.Command, args []string) error {
+		Args: argsWithKeyword(func(cmd *cobra.Command, args []string) error {
 			if opts.all {
 				return cobra.NoArgs(cmd, args)
 			}
 			return cobra.ExactArgs(1)(cmd, args)
-		},
+		}),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
+			args, keyword, err := splitScopeKeyword(args)
+			if err != nil {
+				return err
+			}
+			applyKeywordFilter(keyword, opts)
 			scopes := []bmo.Scope{selectedScope(opts)}
 			if opts.all && !opts.project && !opts.global {
 				scopes = []bmo.Scope{bmo.ScopeGlobal, bmo.ScopeProject}
@@ -322,6 +345,66 @@ func selectedScope(opts *options) bmo.Scope {
 		return bmo.ScopeProject
 	}
 	return bmo.ScopeGlobal
+}
+
+// splitScopeKeyword pulls an optional "here" / "everywhere" location keyword out
+// of a command's positional args. "here" means the current project,
+// "everywhere" means the global install. It returns the args with the keyword
+// removed plus the keyword that was found (empty string if none). Specifying
+// more than one keyword is an error.
+func splitScopeKeyword(args []string) (rest []string, keyword string, err error) {
+	for _, arg := range args {
+		if arg == "here" || arg == "everywhere" {
+			if keyword != "" {
+				return nil, "", errors.New("specify only one location keyword (here or everywhere)")
+			}
+			keyword = arg
+			continue
+		}
+		rest = append(rest, arg)
+	}
+	return rest, keyword, nil
+}
+
+// keywordScope resolves the scope for commands that act on a single scope (add,
+// remove). A keyword wins; otherwise the --project/--global flags decide, and
+// the default is global ("everywhere").
+func keywordScope(keyword string, opts *options) bmo.Scope {
+	switch keyword {
+	case "here":
+		return bmo.ScopeProject
+	case "everywhere":
+		return bmo.ScopeGlobal
+	default:
+		return selectedScope(opts)
+	}
+}
+
+// applyKeywordFilter folds a location keyword into the --project/--global flag
+// pair used by list and update, where "no keyword and no flag" keeps the
+// existing both-scopes behavior.
+func applyKeywordFilter(keyword string, opts *options) {
+	switch keyword {
+	case "here":
+		opts.project = true
+	case "everywhere":
+		opts.global = true
+	}
+}
+
+// argsWithKeyword wraps a cobra positional-args validator so it counts args
+// after an optional location keyword has been stripped out.
+func argsWithKeyword(base cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		rest, _, err := splitScopeKeyword(args)
+		if err != nil {
+			return err
+		}
+		if base == nil {
+			return nil
+		}
+		return base(cmd, rest)
+	}
 }
 
 func selectSkill(root, name string) (bmo.Skill, error) {
@@ -403,7 +486,8 @@ func shouldBootstrap(cmd *cobra.Command, args []string) bool {
 	case "init":
 		return false
 	case "add":
-		if len(args) == 1 && bmo.IsEmbeddedSource(args[0]) {
+		rest, _, err := splitScopeKeyword(args)
+		if err == nil && len(rest) == 1 && bmo.IsEmbeddedSource(rest[0]) {
 			return false
 		}
 	}

@@ -49,9 +49,31 @@ user can see the file list and any executable-file warnings first.
 A bare `owner/repo` is treated as GitHub. When no ref is given, `bmo` tries
 `main`, then falls back to `master`.
 
+## Location keywords: `here` and `everywhere`
+
+`add`, `init`, `list`, `remove`, and `update` accept an optional location
+keyword as a plain positional word:
+
+- **`here`** — the current project (`./.claude/skills`)
+- **`everywhere`** — globally (the default if no keyword or flag is given)
+
+```bash
+bmo add owner/repo here          # install into this project
+bmo add owner/repo everywhere    # install globally (same as the default)
+bmo list here                    # list only this project's skills
+bmo remove cool-skill here       # remove from this project
+bmo update --all here            # update this project's skills
+```
+
+The keyword can go before or after the other argument
+(`bmo add here owner/repo` works too). It is equivalent to the
+`--project` / `--global` flags, which still work. `bmo list` with no
+keyword or flag still lists both scopes.
+
 ## Useful flags
 
-- `--project` — install/list/remove in `./.claude/skills` instead of globally
+- `--project` — install/list/remove in `./.claude/skills` (same as the `here`
+  keyword); `--global` forces global (same as `everywhere`)
 - `--name NAME` — override the installed folder name (must match `^[a-z0-9-]+$`)
 - `--force` — replace an existing install of the same name
 - `--yes` — skip confirmation prompts (use for non-interactive runs)

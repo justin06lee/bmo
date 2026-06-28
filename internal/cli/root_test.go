@@ -21,6 +21,7 @@ func TestShouldBootstrap(t *testing.T) {
 		{"init is skipped", "init", nil, false},
 		{"add embedded by name is skipped", "add", []string{bmo.EmbeddedSkillName}, false},
 		{"add embedded self is skipped", "add", []string{"self"}, false},
+		{"add embedded with keyword is skipped", "add", []string{"here", bmo.EmbeddedSkillName}, false},
 		{"add other source bootstraps", "add", []string{"owner/repo"}, true},
 		{"add with no args bootstraps", "add", nil, true},
 		{"add with extra args bootstraps", "add", []string{bmo.EmbeddedSkillName, "extra"}, true},
@@ -32,6 +33,70 @@ func TestShouldBootstrap(t *testing.T) {
 			cmd := &cobra.Command{Use: tc.cmdName}
 			if got := shouldBootstrap(cmd, tc.args); got != tc.want {
 				t.Fatalf("shouldBootstrap(%q, %v) = %v, want %v", tc.cmdName, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSplitScopeKeyword(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantRest    []string
+		wantKeyword string
+		wantErr     bool
+	}{
+		{"no keyword", []string{"owner/repo"}, []string{"owner/repo"}, "", false},
+		{"here before source", []string{"here", "owner/repo"}, []string{"owner/repo"}, "here", false},
+		{"everywhere after source", []string{"owner/repo", "everywhere"}, []string{"owner/repo"}, "everywhere", false},
+		{"keyword only", []string{"here"}, nil, "here", false},
+		{"empty args", nil, nil, "", false},
+		{"two keywords is an error", []string{"here", "everywhere"}, nil, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rest, keyword, err := splitScopeKeyword(tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("splitScopeKeyword(%v) = nil error, want error", tc.args)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("splitScopeKeyword(%v) unexpected error: %v", tc.args, err)
+			}
+			if keyword != tc.wantKeyword {
+				t.Fatalf("keyword = %q, want %q", keyword, tc.wantKeyword)
+			}
+			if len(rest) != len(tc.wantRest) {
+				t.Fatalf("rest = %v, want %v", rest, tc.wantRest)
+			}
+			for i := range rest {
+				if rest[i] != tc.wantRest[i] {
+					t.Fatalf("rest = %v, want %v", rest, tc.wantRest)
+				}
+			}
+		})
+	}
+}
+
+func TestKeywordScope(t *testing.T) {
+	cases := []struct {
+		name    string
+		keyword string
+		opts    *options
+		want    bmo.Scope
+	}{
+		{"here means project", "here", &options{}, bmo.ScopeProject},
+		{"everywhere means global", "everywhere", &options{}, bmo.ScopeGlobal},
+		{"default is global", "", &options{}, bmo.ScopeGlobal},
+		{"project flag without keyword", "", &options{project: true}, bmo.ScopeProject},
+		{"keyword wins over default", "here", &options{}, bmo.ScopeProject},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := keywordScope(tc.keyword, tc.opts); got != tc.want {
+				t.Fatalf("keywordScope(%q, %+v) = %v, want %v", tc.keyword, tc.opts, got, tc.want)
 			}
 		})
 	}

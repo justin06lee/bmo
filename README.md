@@ -18,6 +18,9 @@ bmo update --all
 bmo remove skill-name
 bmo doctor
 
+bmo add owner/repo here         # install into this project
+bmo add owner/repo everywhere   # install globally (the default)
+
 bmo init       # install the skill bmo ships with
 bmo add bmo    # ...or restore it if you deleted it
 ```
@@ -252,6 +255,30 @@ Installed to `<project-root>/.claude/skills/`.
 Project metadata is stored at `<project-root>/.claude/bmo-lock.json`.
 
 Both scopes can coexist. A skill name collision across scopes triggers a warning during `bmo doctor`.
+
+### Picking a scope: `here` / `everywhere`
+
+`add`, `init`, `list`, `remove`, and `update` take an optional location keyword
+as a plain positional word — a friendlier alias for the `--project` / `--global`
+flags:
+
+| Keyword | Meaning | Equivalent flag |
+|---------|---------|-----------------|
+| `here` | the current project (`./.claude/skills`) | `--project` |
+| `everywhere` | globally (the default) | `--global` |
+
+```bash
+bmo add owner/repo here          # install into this project
+bmo add owner/repo everywhere    # install globally (same as the default)
+bmo list here                    # list only this project's skills
+bmo remove cool-skill here       # remove from this project
+bmo update --all here            # update this project's skills
+```
+
+The keyword may appear before or after the other argument, so
+`bmo add here owner/repo` works too. Commands default to **global** when no
+keyword or flag is given (`bmo list` with neither still lists both scopes). The
+`--project` / `--global` flags continue to work and can be used interchangeably.
 
 ---
 
