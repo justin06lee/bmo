@@ -32,6 +32,7 @@ func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "bmo",
 		Short:         "A tiny installer for Claude Code skills",
+		Version:       buildVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true, // main prints the returned error once
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -47,6 +48,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newRemoveCommand(opts))
 	root.AddCommand(newUpdateCommand(opts))
 	root.AddCommand(newDoctorCommand())
+	root.AddCommand(newUpgradeCommand())
 	return root
 }
 

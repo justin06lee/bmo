@@ -17,6 +17,7 @@ bmo list
 bmo update --all
 bmo remove skill-name
 bmo doctor
+bmo upgrade    # upgrade bmo itself to the latest release
 
 bmo add owner/repo here         # install into this project
 bmo add owner/repo everywhere   # install globally (the default)
