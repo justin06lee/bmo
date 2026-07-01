@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,9 +30,10 @@ type options struct {
 func NewRootCommand() *cobra.Command {
 	opts := &options{}
 	root := &cobra.Command{
-		Use:          "bmo",
-		Short:        "A tiny installer for Claude Code skills",
-		SilenceUsage: true,
+		Use:           "bmo",
+		Short:         "A tiny installer for Claude Code skills",
+		SilenceUsage:  true,
+		SilenceErrors: true, // main prints the returned error once
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			if shouldBootstrap(cmd, args) {
 				bootstrapBmoSkill(cmd)
@@ -87,6 +89,9 @@ func newAddCommand(opts *options) *cobra.Command {
 				return err
 			}
 			dest := filepath.Join(skillsDir, skill.Name)
+			if _, err := os.Stat(dest); err == nil && !opts.force && !opts.dryRun {
+				return fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
+			}
 			printSkillPreview(cmd, skill, src.Raw, scope, dest)
 			if !opts.yes && !opts.dryRun {
 				ok, err := confirm(cmd, "Install? [y/N] ")
@@ -215,6 +220,9 @@ func newListCommand(opts *options) *cobra.Command {
 				return err
 			}
 			if opts.json {
+				if entries == nil {
+					entries = []bmo.SkillMeta{}
+				}
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "NAME\tSCOPE\tSOURCE\tPATH\tUPDATED")
@@ -255,7 +263,7 @@ func newRemoveCommand(opts *options) *cobra.Command {
 			}
 			entry, ok := meta.Skills[args[0]]
 			if !ok {
-				return fmt.Errorf("skill exists on disk but not in metadata, or is not installed: %s\nTry: bmo doctor", args[0])
+				return fmt.Errorf("skill is not tracked by bmo in %s scope: %s\nTry: bmo list, or bmo doctor", scope, args[0])
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Remove %s from %s\n", entry.Name, entry.InstalledPath)
 			if !opts.yes {
@@ -482,8 +490,13 @@ func installBmoSkill(scope bmo.Scope, cwd string, force bool) (bmo.SkillMeta, er
 // this command. It is skipped for the commands that install the skill
 // themselves, to avoid a redundant double install.
 func shouldBootstrap(cmd *cobra.Command, args []string) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if c.Name() == "completion" {
+			return false
+		}
+	}
 	switch cmd.Name() {
-	case "init":
+	case "init", "help", "__complete", "__completeNoDesc":
 		return false
 	case "add":
 		rest, _, err := splitScopeKeyword(args)
@@ -574,6 +587,12 @@ func listEntries(cwd string, opts *options) ([]bmo.SkillMeta, error) {
 			entries = append(entries, entry)
 		}
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Scope != entries[j].Scope {
+			return entries[i].Scope < entries[j].Scope
+		}
+		return entries[i].Name < entries[j].Name
+	})
 	return entries, nil
 }
 
@@ -592,9 +611,15 @@ func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string,
 	} else if entry, ok := meta.Skills[args[0]]; ok {
 		targets[args[0]] = entry
 	} else {
-		return fmt.Errorf("skill is not tracked by bmo: %s", args[0])
+		return fmt.Errorf("skill is not tracked by bmo in %s scope: %s (try 'bmo update %s here' or '--all')", scope, args[0], args[0])
 	}
-	for name, entry := range targets {
+	names := make([]string, 0, len(targets))
+	for name := range targets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entry := targets[name]
 		src, err := bmo.ParseSource(entry.Source)
 		if err != nil {
 			return err

@@ -49,6 +49,31 @@ func TestInstallRefusesOverwriteUnlessForce(t *testing.T) {
 	}
 }
 
+func TestDryRunReportsAlreadyInstalledConflict(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude-test"))
+	cwd := t.TempDir()
+	srcDir := t.TempDir()
+	writeSkill(t, srcDir, "demo")
+	skill, err := ValidateSkill(srcDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := InstallOptions{Scope: ScopeGlobal, Source: Source{Raw: "./demo", Type: SourceLocal}, Skill: skill, CWD: cwd}
+	if _, err := InstallSkill(opts); err != nil {
+		t.Fatal(err)
+	}
+	opts.DryRun = true
+	if _, err := InstallSkill(opts); err == nil {
+		t.Fatal("expected dry-run overwrite error")
+	}
+	opts.Force = true
+	if _, err := InstallSkill(opts); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRemoveInstalledSkill(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

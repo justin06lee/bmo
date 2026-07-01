@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -210,7 +211,7 @@ func scanSkillFiles(dir string) (int, []string, []string, error) {
 		}
 		if notableNames[d.Name()] {
 			notable = append(notable, rel)
-			if !contains(executable, rel) {
+			if !slices.Contains(executable, rel) {
 				executable = append(executable, rel)
 			}
 		}
@@ -219,13 +220,4 @@ func scanSkillFiles(dir string) (int, []string, []string, error) {
 	sort.Strings(notable)
 	sort.Strings(executable)
 	return count, notable, executable, err
-}
-
-func contains(items []string, item string) bool {
-	for _, got := range items {
-		if got == item {
-			return true
-		}
-	}
-	return false
 }

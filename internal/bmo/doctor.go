@@ -46,7 +46,9 @@ func RunDoctor(cwd string) []DoctorCheck {
 }
 
 func checkWritableDir(label, dir string) DoctorCheck {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return DoctorCheck{DoctorOK, fmt.Sprintf("%s does not exist yet (created on first install): %s", label, dir)}
+	} else if err != nil {
 		return DoctorCheck{DoctorError, fmt.Sprintf("%s: %v", label, err)}
 	}
 	tmp, err := os.CreateTemp(dir, ".bmo-write-*")

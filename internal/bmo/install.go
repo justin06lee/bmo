@@ -50,17 +50,18 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 		existing = &got
 	}
 	next := NewSkillMeta(skill, opts.Scope, opts.Source, dest, existing)
+	_, destErr := os.Stat(dest)
+	if destErr == nil && !opts.Force {
+		return SkillMeta{}, fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
+	}
 	if opts.DryRun {
 		return next, nil
-	}
-	if _, err := os.Stat(dest); err == nil && !opts.Force {
-		return SkillMeta{}, fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
 	}
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return SkillMeta{}, err
 	}
 	backup := ""
-	if _, err := os.Stat(dest); err == nil && opts.Force {
+	if destErr == nil && opts.Force {
 		backup = dest + ".bmo-backup-" + time.Now().UTC().Format("20060102150405")
 		if err := os.Rename(dest, backup); err != nil {
 			return SkillMeta{}, err

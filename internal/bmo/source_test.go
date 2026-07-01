@@ -183,6 +183,113 @@ func TestUnzipExtractsNormalEntry(t *testing.T) {
 	}
 }
 
+func TestUnzipSanitizesModeBits(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "modes.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	entries := []struct {
+		name string
+		mode os.FileMode
+		dir  bool
+	}{
+		{"suid.bin", 0o755 | os.ModeSetuid | os.ModeSetgid | os.ModeSticky, false},
+		{"world.txt", 0o666, false},
+		{"noperm.txt", 0, false},
+		{"evil-dir/", 0o777 | os.ModeDir | os.ModeSetgid, true},
+	}
+	for _, e := range entries {
+		hdr := &zip.FileHeader{Name: e.name}
+		hdr.SetMode(e.mode)
+		fw, err := w.CreateHeader(hdr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !e.dir {
+			if _, err := io.WriteString(fw, "x"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := unzip(zipPath, dest); err != nil {
+		t.Fatalf("unzip: %v", err)
+	}
+	for _, name := range []string{"suid.bin", "world.txt", "noperm.txt", "evil-dir"} {
+		info, err := os.Stat(filepath.Join(dest, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			t.Fatalf("%s kept special bits: %v", name, info.Mode())
+		}
+		if info.Mode().Perm()&0o022 != 0 {
+			t.Fatalf("%s is group/world writable: %v", name, info.Mode())
+		}
+	}
+	// Owner execute bit is preserved on the setuid entry.
+	info, err := os.Stat(filepath.Join(dest, "suid.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("suid.bin lost owner execute bit: %v", info.Mode())
+	}
+	// Zero-perm entries default to readable modes.
+	info, err = os.Stat(filepath.Join(dest, "noperm.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o400 == 0 {
+		t.Fatalf("noperm.txt is not owner-readable: %v", info.Mode())
+	}
+}
+
+func TestDownloadAndExtractClearsStaleExtractDir(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		zw := zip.NewWriter(w)
+		fw, err := zw.Create("repo-master/skill.md")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		io.WriteString(fw, "fresh")
+		zw.Close()
+	}))
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	// Simulate leftovers from an earlier failed attempt into the same tmp dir.
+	stale := filepath.Join(tmp, "extract", "repo-main")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "partial.md"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := downloadAndExtract(srv.URL, tmp)
+	if err != nil {
+		t.Fatalf("downloadAndExtract: %v", err)
+	}
+	if filepath.Base(root) != "repo-master" {
+		t.Fatalf("root = %s, want repo-master", root)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "extract", "repo-main")); !os.IsNotExist(err) {
+		t.Fatalf("stale extract dir survived: %v", err)
+	}
+}
+
 // zeroReader yields an endless stream of zero bytes without allocating.
 type zeroReader struct{}
 

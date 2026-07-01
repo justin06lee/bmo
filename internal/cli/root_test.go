@@ -27,6 +27,10 @@ func TestShouldBootstrap(t *testing.T) {
 		{"add with extra args bootstraps", "add", []string{bmo.EmbeddedSkillName, "extra"}, true},
 		{"list bootstraps", "list", nil, true},
 		{"doctor bootstraps", "doctor", nil, true},
+		{"help is skipped", "help", nil, false},
+		{"completion is skipped", "completion", nil, false},
+		{"__complete is skipped", "__complete", nil, false},
+		{"__completeNoDesc is skipped", "__completeNoDesc", nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -35,6 +39,17 @@ func TestShouldBootstrap(t *testing.T) {
 				t.Fatalf("shouldBootstrap(%q, %v) = %v, want %v", tc.cmdName, tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestShouldBootstrapCompletionSubcommands(t *testing.T) {
+	completion := &cobra.Command{Use: "completion"}
+	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
+		sub := &cobra.Command{Use: shell}
+		completion.AddCommand(sub)
+		if shouldBootstrap(sub, nil) {
+			t.Fatalf("shouldBootstrap(completion %s) = true, want false", shell)
+		}
 	}
 }
 
@@ -99,6 +114,41 @@ func TestKeywordScope(t *testing.T) {
 				t.Fatalf("keywordScope(%q, %+v) = %v, want %v", tc.keyword, tc.opts, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestListEntriesSorted(t *testing.T) {
+	isolateHome(t)
+	cwd := t.TempDir()
+
+	globalPath, err := bmo.GlobalMetadataPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := bmo.EmptyMetadata()
+	global.Skills["zeta"] = bmo.SkillMeta{Name: "zeta", Scope: bmo.ScopeGlobal}
+	global.Skills["alpha"] = bmo.SkillMeta{Name: "alpha", Scope: bmo.ScopeGlobal}
+	if err := bmo.WriteMetadata(globalPath, global); err != nil {
+		t.Fatal(err)
+	}
+	project := bmo.EmptyMetadata()
+	project.Skills["beta"] = bmo.SkillMeta{Name: "beta", Scope: bmo.ScopeProject}
+	if err := bmo.WriteMetadata(bmo.ProjectMetadataPath(cwd), project); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := listEntries(cwd, &options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"alpha", "zeta", "beta"}
+	if len(entries) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(entries), len(want))
+	}
+	for i, name := range want {
+		if entries[i].Name != name {
+			t.Fatalf("entries[%d].Name = %q, want %q", i, entries[i].Name, name)
+		}
 	}
 }
 

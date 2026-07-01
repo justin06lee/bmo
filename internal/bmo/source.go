@@ -191,6 +191,9 @@ func resolveZipURL(src Source) (ResolvedSource, error) {
 	if err != nil {
 		return ResolvedSource{}, err
 	}
+	if strings.HasPrefix(src.URL, "http://") {
+		fmt.Fprintln(os.Stderr, "bmo: warning: downloading over insecure http://")
+	}
 	root, err := downloadAndExtract(src.URL, tmp)
 	if err != nil {
 		os.RemoveAll(tmp)
@@ -252,6 +255,9 @@ func downloadAndExtract(rawURL, dest string) (string, error) {
 		return "", err
 	}
 	extractDir := filepath.Join(dest, "extract")
+	if err := os.RemoveAll(extractDir); err != nil {
+		return "", err
+	}
 	if err := unzip(zipPath, extractDir); err != nil {
 		return "", err
 	}
@@ -281,11 +287,18 @@ func unzip(zipPath, dest string) error {
 		if cleanTarget != cleanDest && !strings.HasPrefix(cleanTarget, cleanDest+string(os.PathSeparator)) {
 			return fmt.Errorf("zip contains unsafe path: %s", file.Name)
 		}
+		perm := file.Mode().Perm() &^ 0o022 // drop setuid/setgid/sticky and group/other write
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(cleanTarget, file.Mode()); err != nil {
+			if perm == 0 {
+				perm = 0o755
+			}
+			if err := os.MkdirAll(cleanTarget, perm); err != nil {
 				return err
 			}
 			continue
+		}
+		if perm == 0 {
+			perm = 0o644
 		}
 		if err := os.MkdirAll(filepath.Dir(cleanTarget), 0o755); err != nil {
 			return err
@@ -294,7 +307,7 @@ func unzip(zipPath, dest string) error {
 		if err != nil {
 			return err
 		}
-		dst, err := os.OpenFile(cleanTarget, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		dst, err := os.OpenFile(cleanTarget, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 		if err != nil {
 			src.Close()
 			return err
