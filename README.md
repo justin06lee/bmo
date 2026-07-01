@@ -35,8 +35,9 @@ It resolves a source (GitHub repo, local path, or zip URL), finds installable sk
 
 `bmo` ships with its own tiny Claude Code skill baked into the binary (the
 `skills/bmo/` folder, embedded at build time). It teaches Claude Code how to
-drive `bmo` — installing, inspecting, listing, updating, and removing skills —
-so you can just ask Claude to manage your skills in plain language.
+author skills to `bmo`'s contract — the folder layout, `SKILL.md` frontmatter
+rules, naming constraints, and repo structure — so anything Claude creates is
+immediately installable with `bmo add`.
 
 You don't have to install it by hand. **The first time you run any `bmo`
 command, bmo installs the `bmo` skill globally** (once) and prints a one-line
