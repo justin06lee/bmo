@@ -256,3 +256,70 @@ func TestBootstrapBmoSkillSkipsWhenTracked(t *testing.T) {
 		t.Fatalf("expected marker to be written even when install is skipped: %v", err)
 	}
 }
+
+func TestUpdateSkipsUnchangedAndUpdatesChanged(t *testing.T) {
+	isolateHome(t)
+	cwd := t.TempDir()
+
+	srcDir := filepath.Join(t.TempDir(), "demo")
+	skillMD := filepath.Join(srcDir, "SKILL.md")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skillMD, []byte("---\nname: demo\ndescription: d\n---\nv1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	src, err := bmo.ParseSource(srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err := bmo.ValidateSkill(srcDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := bmo.InstallSkill(bmo.InstallOptions{Scope: bmo.ScopeGlobal, CWD: cwd, Source: src, Skill: skill})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runUpdate := func() string {
+		t.Helper()
+		out := &bytes.Buffer{}
+		cmd := &cobra.Command{}
+		cmd.SetOut(out)
+		cache := map[string]bmo.ResolvedSource{}
+		defer func() {
+			for _, resolved := range cache {
+				cleanupResolved(resolved)
+			}
+		}()
+		if err := updateScope(cmd, cwd, bmo.ScopeGlobal, nil, &options{all: true}, cache); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+
+	if got := runUpdate(); got != "demo is up to date\n" {
+		t.Fatalf("expected unchanged skill to be skipped, got %q", got)
+	}
+
+	if err := os.WriteFile(skillMD, []byte("---\nname: demo\ndescription: d\n---\nv2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := runUpdate(); got != "Updated demo\n" {
+		t.Fatalf("expected changed skill to be updated, got %q", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(installed.InstalledPath, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("v2")) {
+		t.Fatalf("expected installed copy to carry the new content, got %q", data)
+	}
+
+	if got := runUpdate(); got != "demo is up to date\n" {
+		t.Fatalf("expected second update after refresh to be a no-op, got %q", got)
+	}
+}

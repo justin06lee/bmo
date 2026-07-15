@@ -14,7 +14,7 @@
 bmo add owner/repo
 bmo inspect owner/repo
 bmo list
-bmo update --all
+bmo update
 bmo remove skill-name
 bmo doctor
 bmo upgrade    # upgrade bmo itself to the latest release
@@ -98,8 +98,8 @@ bmo add --project owner/repo
 # List installed skills
 bmo list
 
-# Update every installed skill
-bmo update --all
+# Update every installed skill that changed at its source
+bmo update
 
 # Remove a skill
 bmo remove skill-name
@@ -206,22 +206,26 @@ Removes the skill directory from disk and its entry from the metadata file.
 
 ### `update`
 
-Reinstall a skill from its original source.
+Refresh installed skills whose source content changed.
 
 ```bash
+bmo update [--project] [--global] [--yes] [--dry-run]
 bmo update SKILL_NAME [--project] [--global] [--yes] [--dry-run]
-bmo update --all [--project] [--global] [--yes] [--dry-run]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--all` | Update every tracked skill |
+| `--all` | Update every tracked skill (the default when no name is given) |
 | `--project` | Update only project-installed skills |
 | `--global` | Update only globally-installed skills |
 | `--yes` | Skip confirmation |
 | `--dry-run` | Show what would be updated without writing anything |
 
-Re-resolves the original source and reinstalls. Existing skill files are overwritten. The original `InstalledAt` timestamp is preserved.
+Re-resolves each skill's original source and compares its content hash against
+the installed copy: unchanged skills are reported as `up to date` and left
+untouched; changed ones are reinstalled (existing files overwritten, the
+original `InstalledAt` timestamp preserved). Skills tracked from the same
+source share a single download per run.
 
 ### `doctor`
 
@@ -274,7 +278,7 @@ bmo add owner/repo here          # install into this project
 bmo add owner/repo everywhere    # install globally (same as the default)
 bmo list here                    # list only this project's skills
 bmo remove cool-skill here       # remove from this project
-bmo update --all here            # update this project's skills
+bmo update here                  # update this project's skills
 ```
 
 The keyword may appear before or after the other argument, so
