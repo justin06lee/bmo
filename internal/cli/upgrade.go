@@ -27,6 +27,10 @@ func newUpgradeCommand() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Current version: %s\n", buildVersion())
 			install := exec.Command(goBin, "install", modulePath+"@latest")
+			// The module proxy caches @latest for a few minutes, which can
+			// silently downgrade to a stale release right after a tag is
+			// pushed. Resolve straight from the origin instead.
+			install.Env = append(os.Environ(), "GOPROXY=direct")
 			install.Stdout = cmd.OutOrStdout()
 			install.Stderr = cmd.ErrOrStderr()
 			if err := install.Run(); err != nil {
