@@ -293,13 +293,13 @@ func newRemoveCommand(opts *options) *cobra.Command {
 
 func newUpdateCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "update SKILL_NAME [here|everywhere]",
-		Short: "Update installed skills from their original source",
+		Use:   "update [SKILL_NAME] [here|everywhere]",
+		Short: "Update installed skills whose source content changed",
 		Args: argsWithKeyword(func(cmd *cobra.Command, args []string) error {
 			if opts.all {
 				return cobra.NoArgs(cmd, args)
 			}
-			return cobra.ExactArgs(1)(cmd, args)
+			return cobra.MaximumNArgs(1)(cmd, args)
 		}),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
@@ -311,19 +311,29 @@ func newUpdateCommand(opts *options) *cobra.Command {
 				return err
 			}
 			applyKeywordFilter(keyword, opts)
+			if len(args) == 0 {
+				opts.all = true
+			}
 			scopes := []bmo.Scope{selectedScope(opts)}
 			if opts.all && !opts.project && !opts.global {
 				scopes = []bmo.Scope{bmo.ScopeGlobal, bmo.ScopeProject}
 			}
+			// Skills tracked from the same source share one download per run.
+			cache := map[string]bmo.ResolvedSource{}
+			defer func() {
+				for _, resolved := range cache {
+					cleanupResolved(resolved)
+				}
+			}()
 			for _, scope := range scopes {
-				if err := updateScope(cmd, cwd, scope, args, opts); err != nil {
+				if err := updateScope(cmd, cwd, scope, args, opts, cache); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&opts.all, "all", false, "Update all tracked skills")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "Update all tracked skills (default when no name is given)")
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Use project metadata")
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Use global metadata")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
@@ -598,7 +608,7 @@ func listEntries(cwd string, opts *options) ([]bmo.SkillMeta, error) {
 	return entries, nil
 }
 
-func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string, opts *options) error {
+func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string, opts *options, cache map[string]bmo.ResolvedSource) error {
 	_, metadataPath, err := bmo.ScopePaths(scope, cwd)
 	if err != nil {
 		return err
@@ -622,24 +632,30 @@ func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string,
 	sort.Strings(names)
 	for _, name := range names {
 		entry := targets[name]
-		src, err := bmo.ParseSource(entry.Source)
-		if err != nil {
-			return err
-		}
-		resolved, err := bmo.ResolveSource(src)
-		if err != nil {
-			return err
+		resolved, ok := cache[entry.Source]
+		if !ok {
+			src, err := bmo.ParseSource(entry.Source)
+			if err != nil {
+				return err
+			}
+			resolved, err = bmo.ResolveSource(src)
+			if err != nil {
+				return err
+			}
+			cache[entry.Source] = resolved
 		}
 		skill, err := selectSkill(resolved.Root, name)
 		if err == nil {
 			skill, err = bmo.ValidateSkill(skill.Path, name)
 		}
 		if err != nil {
-			cleanupResolved(resolved)
 			return err
 		}
+		if !skillChanged(skill.Path, entry.InstalledPath) {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date\n", name)
+			continue
+		}
 		_, err = bmo.InstallSkill(bmo.InstallOptions{Scope: scope, Name: name, Force: true, DryRun: opts.dryRun, CWD: cwd, Source: resolved.Source, Skill: skill})
-		cleanupResolved(resolved)
 		if err != nil {
 			return err
 		}
@@ -650,4 +666,19 @@ func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string,
 		}
 	}
 	return nil
+}
+
+// skillChanged reports whether the resolved source content differs from the
+// installed copy. Hash failures (e.g. a missing install dir) count as changed
+// so the update proceeds and repairs the install.
+func skillChanged(sourceDir, installedDir string) bool {
+	installedHash, err := bmo.HashDir(installedDir)
+	if err != nil {
+		return true
+	}
+	sourceHash, err := bmo.HashDir(sourceDir)
+	if err != nil {
+		return true
+	}
+	return sourceHash != installedHash
 }
