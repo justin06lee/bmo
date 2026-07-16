@@ -1,15 +1,105 @@
 ---
 name: bmo
-description: Use when creating, formatting, or restructuring a Claude Code skill so it can be installed with the bmo CLI. Triggers on phrases like "make a skill", "create a skill", "write a SKILL.md", "package this as a skill", "make this bmo-compatible", or preparing a folder/repo of skills for distribution.
+description: Use when managing Claude Code skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade) or when creating/formatting a skill so bmo can install it. Triggers on "install a skill", "add/update/remove a skill", "bmo <anything>", pointing at a GitHub repo, folder, or zip containing a SKILL.md, and on "make a skill", "write a SKILL.md", "package this as a skill", "make this bmo-compatible".
 ---
 
-# Authoring bmo-compatible skills
+# bmo
 
-`bmo` installs a skill by copying a folder into Claude Code's skills directory.
-A skill is **one folder containing a `SKILL.md` file**. Whenever you create or
-restructure a skill, follow this contract exactly so `bmo add` accepts it.
+`bmo` is a tiny command-line installer for Claude Code skills. A skill is a
+folder containing a `SKILL.md` file. `bmo` resolves a source (GitHub repo,
+local folder, or zip URL), validates the skill, copies it into Claude Code's
+skills directory, and tracks it so it can be listed, updated, or removed.
 
-## The contract
+It **only copies files** — it never executes downloaded code, runs install
+hooks, or installs dependencies.
+
+This skill covers two jobs: **using bmo** to manage installed skills, and
+**authoring skills** that bmo can install. If `bmo` is not installed, tell the
+user to run `go install github.com/justin06lee/bmo@latest`.
+
+---
+
+## Part 1 — Using bmo
+
+### Core commands
+
+```bash
+bmo add SOURCE        # install a skill
+bmo inspect SOURCE    # preview a skill without installing
+bmo list              # list installed skills (both scopes)
+bmo update            # re-check every tracked skill, reinstall the changed ones
+bmo update NAME       # same check for one skill
+bmo remove NAME       # uninstall a skill
+bmo doctor            # run diagnostics
+bmo init              # (re)install this bundled bmo skill
+bmo upgrade           # upgrade the bmo binary itself to the latest release
+bmo --version         # show the installed bmo version
+```
+
+Always run `bmo inspect SOURCE` before `bmo add` for third-party sources so
+the user can see the file list and any executable-file warnings first.
+
+### Source formats
+
+| Format | Example |
+|--------|---------|
+| GitHub repo | `owner/repo` or `github:owner/repo` |
+| GitHub subpath | `owner/repo/path/to/skill` |
+| GitHub with ref | `owner/repo@v1.0.0` or `owner/repo/path@branch` |
+| Local directory | `./path/to/skill` (must start with `./`, `../`, `/`, or `~`) |
+| Zip URL | `https://example.com/skill.zip` |
+| This bundled skill | `bmo` (or `self`) |
+
+A bare `owner/repo` is treated as GitHub. When no ref is given, bmo tries the
+`main` branch, then falls back to `master`. Sources are capped at 256 MiB.
+
+### Scopes: `here` and `everywhere`
+
+`add`, `init`, `list`, `remove`, and `update` accept an optional location
+keyword as a plain positional word, before or after the other argument:
+
+- **`here`** — the current project (`./.claude/skills`, metadata in
+  `.claude/bmo-lock.json`)
+- **`everywhere`** — global, the default (`$CLAUDE_CONFIG_DIR/skills/` or
+  `~/.claude/skills/`, metadata in `~/.bmo/skills.json`)
+
+```bash
+bmo add owner/repo here       # install into this project
+bmo list here                 # only this project's skills
+bmo remove cool-skill here
+bmo update here               # update only this project's skills
+```
+
+The `--project` / `--global` flags are equivalent. `bmo list` and `bmo update`
+with no keyword or flag cover both scopes.
+
+### Updating
+
+`bmo update` re-resolves each tracked skill's original source, compares a
+content hash against the installed copy, reinstalls only what changed, and
+reports everything else as `up to date`. Use `--dry-run` to preview.
+
+### Useful flags
+
+- `--name NAME` — override the installed folder name (must match `^[a-z0-9-]+$`)
+- `--force` — replace an existing install of the same name (on `add`)
+- `--yes` — skip confirmation prompts; use for non-interactive runs
+- `--dry-run` — show what would happen without writing anything
+- `--json` — machine-readable output (on `list`)
+
+### Troubleshooting
+
+If a skill folder is missing, metadata looks corrupt, or names collide across
+scopes, run `bmo doctor` — it pinpoints the issue without changing anything.
+The first bmo run auto-installs this skill globally once (sentinel:
+`~/.bmo/.bootstrapped`); `bmo remove bmo` sticks after that.
+
+---
+
+## Part 2 — Authoring bmo-compatible skills
+
+Whenever you create or restructure a skill, follow this contract exactly so
+`bmo add` accepts it.
 
 ```
 my-skill/                 <- folder name: lowercase letters, digits, hyphens only
@@ -34,15 +124,14 @@ Instructions for Claude go here.
 
 ### Frontmatter rules
 
-- `description` is **required** and non-empty. Keep it under 1024 characters
-  (longer only produces a warning, but stay under it). Write it as trigger
-  guidance: when should Claude reach for this skill?
+- `description` is **required** and non-empty. Keep it under 1024 characters.
+  Write it as trigger guidance: when should Claude reach for this skill?
 - `name` is optional but recommended. If present it must match `^[a-z0-9-]+$`
   and be at most 64 characters. It becomes the installed folder name and the
   `/slash-command` in Claude Code.
-- If `name` is omitted, the folder name is used instead: lowercased, with every
-  run of other characters collapsed to a single `-`. Prefer setting `name`
-  explicitly so the identity doesn't depend on the folder.
+- If `name` is omitted, the folder name is used instead: lowercased, with
+  every run of other characters collapsed to a single `-`. Prefer setting
+  `name` explicitly.
 
 ### Hard rules (install fails if violated)
 
@@ -56,22 +145,16 @@ Instructions for Claude go here.
 
 - `.git`, `node_modules`, `.venv`, and `__pycache__` directories are skipped
   during discovery and copying — never put required content inside them.
-- Downloaded sources (GitHub repos, zip URLs) are capped at 256 MiB.
-- Executable-looking files (`.py`, `.sh`, `.js`, `.ts`, `.rb`, `.go`, …) and
-  dependency manifests (`package.json`, `requirements.txt`, …) are allowed but
-  surfaced to the user as a security warning. bmo only copies files; it never
-  runs anything, so scripts must be invoked from the SKILL.md instructions.
+- Executable-looking files (`.py`, `.sh`, `.js`, …) and dependency manifests
+  (`package.json`, `requirements.txt`, …) are allowed but surfaced to the user
+  as a security warning. bmo never runs them; scripts must be invoked from the
+  SKILL.md instructions.
 
-## Laying out a repo for distribution
-
-bmo can install from a GitHub repo (`owner/repo`, optional `/sub/path` and
-`@ref`), a local folder, or a `.zip` URL. Discovery works like this:
+### Laying out a repo for distribution
 
 - If `SKILL.md` sits at the source root, the root itself is the skill.
 - Otherwise the whole tree is walked and **every folder containing a
   `SKILL.md` is a separate installable skill**.
-
-So structure repos one of two ways:
 
 ```
 # Single skill: SKILL.md at the repo root
@@ -85,16 +168,14 @@ repo/
     └── skill-two/SKILL.md
 ```
 
-Don't nest a `SKILL.md` inside another skill's folder — each one is treated as
-its own skill and multi-match sources force the user to disambiguate.
+Don't nest a `SKILL.md` inside another skill's folder — each one is treated
+as its own skill, and multi-match sources force the user to pick with `--name`.
 
-## Verify before shipping
-
-After authoring, validate with the real parser:
+### Verify before shipping
 
 ```bash
-bmo inspect ./my-skill    # shows name, description, file count, warnings
+bmo inspect ./my-skill    # runs the real validator: name, description, warnings
 ```
 
-Fix anything reported before delivering. The user installs it with
-`bmo add ./my-skill` (or `bmo add owner/repo` once pushed).
+Fix anything reported, then deliver with `bmo add ./my-skill` (or
+`bmo add owner/repo` once pushed).
