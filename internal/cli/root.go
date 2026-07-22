@@ -76,6 +76,9 @@ func newAddCommand(opts *options) *cobra.Command {
 				return err
 			}
 			defer cleanupResolved(resolved)
+			if opts.all {
+				return addAll(cmd, resolved, src, scope, cwd, opts)
+			}
 			skill, err := selectSkill(resolved.Root, opts.name)
 			if err != nil {
 				return err
@@ -138,7 +141,158 @@ func newAddCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.force, "force", false, "Replace an existing installed skill")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would happen without copying files")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "Install every skill the source contains")
 	return cmd
+}
+
+// addAll installs every skill a source contains.
+//
+// Repositories commonly ship a suite of skills that are only useful together,
+// and installing them one `add` at a time is both tedious and easy to get
+// half-done. The whole batch is validated before anything is written so the
+// user does not end up with a partial suite.
+func addAll(cmd *cobra.Command, resolved bmo.ResolvedSource, src bmo.Source, scope bmo.Scope, cwd string, opts *options) error {
+	if opts.name != "" {
+		return errors.New("--name renames a single skill; it cannot be combined with --all")
+	}
+	skills, err := bmo.DiscoverSkills(resolved.Root)
+	if err != nil {
+		return err
+	}
+	if len(skills) == 0 {
+		return errors.New("no skills found")
+	}
+	var invalid []string
+	byName := map[string][]string{}
+	for _, skill := range skills {
+		if skill.Name == "" {
+			invalid = append(invalid, fmt.Sprintf("%s (%s)", skill.Path, strings.Join(skill.Warnings, "; ")))
+			continue
+		}
+		byName[skill.Name] = append(byName[skill.Name], skill.Path)
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("cannot install every skill: %d failed validation:\n  %s",
+			len(invalid), strings.Join(invalid, "\n  "))
+	}
+	// Two folders resolving to one name would silently install whichever came
+	// last. Point at a narrower subpath instead of guessing which was meant.
+	var duplicates []string
+	for name, paths := range byName {
+		if len(paths) > 1 {
+			sort.Strings(paths)
+			duplicates = append(duplicates, fmt.Sprintf("%s: %s", name, strings.Join(paths, ", ")))
+		}
+	}
+	if len(duplicates) > 0 {
+		sort.Strings(duplicates)
+		return fmt.Errorf("cannot install every skill: %d duplicate skill names in this source:\n  %s\n"+
+			"Install from a narrower subpath (for example owner/repo/skills), or add them one at a time with --name",
+			len(duplicates), strings.Join(duplicates, "\n  "))
+	}
+
+	skillsDir, _, err := bmo.ScopePaths(scope, cwd)
+	if err != nil {
+		return err
+	}
+	agentsDir, err := bmo.AgentsDir(scope, cwd)
+	if err != nil {
+		return err
+	}
+	var conflicts []string
+	agentOwners := map[string]string{}
+	for _, skill := range skills {
+		conflict, err := bmo.CheckInstallConflicts(skill, scope, cwd)
+		if err != nil {
+			return err
+		}
+		if !opts.force && !conflict.Empty() {
+			if conflict.Path != "" {
+				conflicts = append(conflicts, fmt.Sprintf("%s is already installed at %s", skill.Name, conflict.Path))
+			}
+			for _, agent := range conflict.Agents {
+				conflicts = append(conflicts, fmt.Sprintf("%s ships subagent %s, which bmo does not own", skill.Name, agent))
+			}
+		}
+		// Two skills in one source claiming one subagent file is an authoring
+		// bug: whichever installs last would silently win.
+		for _, agent := range skill.Agents {
+			if owner, ok := agentOwners[agent.File]; ok {
+				conflicts = append(conflicts, fmt.Sprintf("subagent %s is shipped by both %s and %s", agent.File, owner, skill.Name))
+				continue
+			}
+			agentOwners[agent.File] = skill.Name
+		}
+	}
+	if len(conflicts) > 0 {
+		sort.Strings(conflicts)
+		return fmt.Errorf("cannot install every skill:\n  %s\nUse --force to replace what bmo already installed",
+			strings.Join(conflicts, "\n  "))
+	}
+
+	printBatchPreview(cmd, skills, src.Raw, scope, skillsDir, agentsDir)
+	if !opts.yes && !opts.dryRun {
+		ok, err := confirm(cmd, fmt.Sprintf("Install all %d? [y/N] ", len(skills)))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("install cancelled")
+		}
+	}
+	installed, agentCount := 0, 0
+	for _, skill := range skills {
+		meta, err := bmo.InstallSkill(bmo.InstallOptions{
+			Scope:  scope,
+			Force:  opts.force,
+			DryRun: opts.dryRun,
+			CWD:    cwd,
+			Source: resolved.Source,
+			Skill:  skill,
+		})
+		if err != nil {
+			return fmt.Errorf("installed %d of %d skills, then failed on %s: %w", installed, len(skills), skill.Name, err)
+		}
+		installed++
+		agentCount += len(meta.Agents)
+	}
+	verb := "Installed"
+	if opts.dryRun {
+		verb = "Dry run: would install"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %d skills to %s\n", verb, installed, skillsDir)
+	if agentCount > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s %d subagents to %s\n", verb, agentCount, agentsDir)
+	}
+	return nil
+}
+
+func printBatchPreview(cmd *cobra.Command, skills []bmo.Skill, source string, scope bmo.Scope, skillsDir, agentsDir string) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Found %d skills\n\nSource: %s\nScope: %s\nDestination: %s\n", len(skills), source, scope, skillsDir)
+	totalAgents, withExecutables := 0, 0
+	for _, skill := range skills {
+		totalAgents += len(skill.Agents)
+		if len(skill.ExecutableFiles) > 0 {
+			withExecutables++
+		}
+	}
+	if totalAgents > 0 {
+		fmt.Fprintf(out, "Subagent destination: %s\n", agentsDir)
+	}
+	fmt.Fprintln(out)
+	for _, skill := range skills {
+		line := fmt.Sprintf("  %-24s %d files", skill.Name, skill.FileCount)
+		if len(skill.Agents) > 0 {
+			line += fmt.Sprintf(", %d subagents", len(skill.Agents))
+		}
+		fmt.Fprintln(out, line)
+	}
+	if withExecutables > 0 {
+		fmt.Fprintf(out, "\n%d of these skills include executable-looking files.\n", withExecutables)
+		fmt.Fprintln(out, "Skills may include executable code. Review third-party skills before use.")
+	}
+	fmt.Fprintln(out)
 }
 
 func newInitCommand(opts *options) *cobra.Command {

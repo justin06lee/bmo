@@ -98,6 +98,9 @@ bmo inspect owner/repo
 # Install a skill globally
 bmo add owner/repo
 
+# Install every skill a repo ships
+bmo add owner/repo --all
+
 # Install to the current project instead
 bmo add --project owner/repo
 
@@ -126,16 +129,28 @@ bmo init
 Install a skill from a source.
 
 ```bash
-bmo add SOURCE [--project] [--name NAME] [--force] [--yes] [--dry-run]
+bmo add SOURCE [--all] [--project] [--name NAME] [--force] [--yes] [--dry-run]
 ```
 
 | Flag | Description |
 |------|-------------|
+| `--all` | Install every skill the source contains, instead of picking one |
 | `--project` | Install to the current project's `.claude/skills/` instead of globally |
-| `--name` | Override the skill name (must match `^[a-z0-9-]+$`) |
+| `--name` | Override the skill name (must match `^[a-z0-9-]+$`); cannot be combined with `--all` |
 | `--force` | Overwrite an existing installation with the same name, or a subagent bmo doesn't own |
 | `--yes` | Skip all confirmation prompts |
 | `--dry-run` | Show what would be installed without writing anything |
+
+**Installing a whole suite.** When a repository ships a set of skills meant to be used together, `--all` installs them in one command:
+
+```bash
+bmo add owner/repo --all              # every skill in the repo
+bmo add owner/repo/skills --all       # every skill under skills/
+```
+
+Each skill is tracked individually, so `update` and `remove` still work per skill. The batch is validated before anything is written — if any skill fails validation, any name is claimed twice, any skill is already installed (without `--force`), or two skills ship the same subagent file, nothing is installed and the reason is reported. That check is what keeps a failed run from leaving half a suite behind.
+
+Duplicate names are refused rather than resolved, since installing whichever folder came last would silently pick for you. Narrow the source to a subpath (`owner/repo/skills`) or install the odd one out separately with `--name`.
 
 **Source formats:**
 

@@ -29,6 +29,7 @@ user to run `go install github.com/justin06lee/bmo@latest`.
 
 ```bash
 bmo add SOURCE        # install a skill (and any subagents it bundles)
+bmo add SOURCE --all  # install every skill the source contains
 bmo inspect SOURCE    # preview a skill without installing
 bmo list              # list installed skills (both scopes)
 bmo update            # re-check every tracked skill, reinstall the changed ones
@@ -84,8 +85,26 @@ with no keyword or flag cover both scopes.
 content hash against the installed copy, reinstalls only what changed, and
 reports everything else as `up to date`. Use `--dry-run` to preview.
 
+### Installing a whole suite
+
+Repositories that ship several skills meant to work together install in one go
+with `--all`:
+
+```bash
+bmo add owner/repo --all           # every skill in the repo
+bmo add owner/repo/skills --all    # every skill under skills/
+```
+
+Each skill is still tracked separately, so `update` and `remove` work per skill.
+The whole batch is checked before anything is written, and nothing is installed
+if any skill fails validation, two folders claim the same name, a skill is
+already installed (without `--force`), or two skills ship the same subagent
+file. Duplicate names are reported rather than resolved — narrow the source to a
+subpath, or install the odd one out separately with `--name`.
+
 ### Useful flags
 
+- `--all` — install every skill in the source (not combinable with `--name`)
 - `--name NAME` — override the installed folder name (must match `^[a-z0-9-]+$`)
 - `--force` — replace an existing install of the same name (on `add`)
 - `--yes` — skip confirmation prompts; use for non-interactive runs
@@ -282,7 +301,12 @@ repo/
 ```
 
 Don't nest a `SKILL.md` inside another skill's folder — each one is treated
-as its own skill, and multi-match sources force the user to pick with `--name`.
+as its own skill, and multi-match sources force the user to pick with `--name`
+or install the set with `--all`.
+
+Skill names must be unique across the whole source, or `--all` refuses the
+batch. Mirroring one skill in two places (say `skills/x/` and
+`extensions/pack/skills/x/`) is the usual cause.
 
 The single-skill shape is the one to reach for when a skill needs a shared
 runtime: scripts, binaries, and agents all live inside the installed folder, so
