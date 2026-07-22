@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,7 +23,10 @@ type Skill struct {
 	NotableFiles    []string
 	ExecutableFiles []string
 	Agents          []Agent
-	Warnings        []string
+	// IgnoreRules counts the .bmoignore patterns that shaped FileCount, so the
+	// install preview can say why a large repository installs as few files.
+	IgnoreRules int
+	Warnings    []string
 }
 
 type Frontmatter struct {
@@ -62,15 +66,31 @@ func DiscoverSkills(root string) ([]Skill, error) {
 		}
 		return []Skill{skill}, nil
 	}
+	// A repository-level .bmoignore keeps discovery away from fixture or
+	// example skills that are not meant to be installable.
+	ignore, err := LoadIgnore(root)
+	if err != nil {
+		return nil, err
+	}
 	var skills []Skill
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
 		}
 		if d.IsDir() {
 			if path != root && ignoredDirs[d.Name()] {
 				return filepath.SkipDir
 			}
+			if path != root && ignore.Match(rel, true) && ignore.CanPrune() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if ignore.Match(rel, false) {
 			return nil
 		}
 		if d.Name() == "SKILL.md" {
@@ -122,6 +142,11 @@ func ValidateSkill(dir, nameOverride string) (Skill, error) {
 	if len(fm.Description) > 1024 {
 		skill.Warnings = append(skill.Warnings, "description is longer than 1024 characters")
 	}
+	ignore, err := LoadIgnore(dir)
+	if err != nil {
+		return Skill{}, err
+	}
+	skill.IgnoreRules = ignore.Len()
 	fileCount, notable, executable, err := scanSkillFiles(dir)
 	if err != nil {
 		return Skill{}, err
@@ -198,22 +223,12 @@ func scanSkillFiles(dir string) (int, []string, []string, error) {
 	count := 0
 	var notable []string
 	var executable []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != dir && ignoredDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	ignore, err := LoadIgnore(dir)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	err = walkIgnored(dir, ignore, func(path, rel string, d fs.DirEntry) error {
 		count++
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		if executableExts[strings.ToLower(filepath.Ext(d.Name()))] {
 			executable = append(executable, rel)
 		}
