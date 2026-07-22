@@ -21,6 +21,7 @@ type Skill struct {
 	FileCount       int
 	NotableFiles    []string
 	ExecutableFiles []string
+	Agents          []Agent
 	Warnings        []string
 }
 
@@ -131,6 +132,13 @@ func ValidateSkill(dir, nameOverride string) (Skill, error) {
 	if len(executable) > 0 {
 		skill.Warnings = append(skill.Warnings, "Skills may include executable code. Review third-party skills before use.")
 	}
+	// A malformed agent file fails validation rather than being skipped: a
+	// subagent that never resolves is a silent hole in the skill's behavior.
+	agents, err := DiscoverAgents(dir)
+	if err != nil {
+		return Skill{}, err
+	}
+	skill.Agents = agents
 	return skill, nil
 }
 
