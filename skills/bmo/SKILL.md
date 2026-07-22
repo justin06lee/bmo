@@ -109,6 +109,7 @@ Whenever you create or restructure a skill, follow this contract exactly so
 ```
 my-skill/                 <- folder name: lowercase letters, digits, hyphens only
 ├── SKILL.md              <- required, at the folder root, frontmatter first
+├── .bmoignore            <- optional; paths to keep out of the install
 ├── references/           <- optional supporting files, copied verbatim
 ├── scripts/              <- optional; executable files are allowed but flagged
 └── agents/               <- optional subagent definitions, installed separately
@@ -182,6 +183,56 @@ Rules for `agents/`:
 - `agents/` is also copied inside the skill folder, so the installed skill stays
   a faithful copy of what you published.
 
+### Excluding files with `.bmoignore`
+
+When the skill folder is also a working repository, put a `.bmoignore` at the
+skill root so tests, CI config, and demo assets never reach the user's skills
+directory. Without one, everything except `.git`, `node_modules`, `.venv`, and
+`__pycache__` is installed.
+
+```gitignore
+# Development-only trees
+tests/
+.github/
+screenshots/
+*.gif
+
+# Anchored to the skill root, so nested build/ folders survive
+/build
+
+# Wildcards span segments with **
+docs/**/*.png
+
+# A later ! line re-includes
+*.svg
+!logo.svg
+```
+
+Syntax is the gitignore subset you already know:
+
+| Form | Meaning |
+|------|---------|
+| `# text` | comment; blank lines are skipped |
+| `name` | matches that basename at any depth |
+| `name/` | matches directories only |
+| `/name` or `a/b` | anchored to the skill root |
+| `*`, `?` | wildcards inside one path segment |
+| `**` | spans zero or more segments |
+| `!name` | re-includes something an earlier line excluded |
+
+Two rules differ from a naive reading, both deliberately:
+
+- **`SKILL.md` at the skill root can never be ignored.** A pattern like `*.md`
+  excludes everything else but leaves the skill installable.
+- **A negation cannot rescue a file inside an excluded directory.** `vendor/`
+  followed by `!vendor/keep.txt` still excludes `keep.txt`, exactly as git
+  behaves. Exclude `vendor/*` instead if you need exceptions.
+
+The `.bmoignore` file is itself installed, so the skill on disk documents what
+was left out. It applies to every walk bmo does: which files get copied, which
+subagents get installed, which folders count as skills, and the content hash
+`bmo update` compares — so excluded files never show up as phantom changes.
+
 ### Hard rules (install fails if violated)
 
 - `SKILL.md` must exist at the skill folder's root and start with frontmatter.
@@ -197,8 +248,13 @@ Rules for `agents/`:
 
 ### Silently ignored / limits
 
-- `.git`, `node_modules`, `.venv`, and `__pycache__` directories are skipped
-  during discovery and copying — never put required content inside them.
+- `.git`, `node_modules`, `.venv`, and `__pycache__` directories are always
+  skipped during discovery and copying — never put required content inside them.
+- Anything matched by `.bmoignore` is skipped as well.
+- Only top-level `agents/*.md` files become subagents; nested folders are
+  ignored because Claude Code does not scan them.
+- `.bmoignore` is read from the skill root only; nested ignore files have no
+  effect.
 - Executable-looking files (`.py`, `.sh`, `.js`, …) and dependency manifests
   (`package.json`, `requirements.txt`, …) are allowed but surfaced to the user
   as a security warning. bmo never runs them; scripts must be invoked from the
@@ -213,7 +269,10 @@ Rules for `agents/`:
 ```
 # Single skill: SKILL.md at the repo root
 repo/
-└── SKILL.md
+├── SKILL.md
+├── .bmoignore        <- keep tests/ and CI config out of the install
+├── scripts/
+└── agents/
 
 # Multiple skills: one folder per skill
 repo/
@@ -225,11 +284,21 @@ repo/
 Don't nest a `SKILL.md` inside another skill's folder — each one is treated
 as its own skill, and multi-match sources force the user to pick with `--name`.
 
+The single-skill shape is the one to reach for when a skill needs a shared
+runtime: scripts, binaries, and agents all live inside the installed folder, so
+one `bmo add owner/repo` delivers a working whole. The multi-skill shape suits
+independent skills that share a repository but not a runtime.
+
 ### Verify before shipping
 
 ```bash
 bmo inspect ./my-skill    # runs the real validator: name, description, warnings
 ```
+
+`inspect` reports the resolved name, the file count after `.bmoignore` is
+applied, how many ignore rules ran, the subagents that would be installed, and
+any warnings. Check the file count and subagent list against what you expect —
+that is where a mis-scoped ignore rule or a missed `agents/` folder shows up.
 
 Fix anything reported, then deliver with `bmo add ./my-skill` (or
 `bmo add owner/repo` once pushed).

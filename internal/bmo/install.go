@@ -186,23 +186,20 @@ func CopyDir(src, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return fmt.Errorf("destination already exists: %s", dest)
 	}
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dest, rel)
-		if d.IsDir() {
-			if path != src && ignoredDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return os.MkdirAll(target, 0o755)
-		}
+	ignore, err := LoadIgnore(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	return walkIgnored(src, ignore, func(path, rel string, d fs.DirEntry) error {
 		if d.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("refusing to copy symlink: %s", path)
+		}
+		target := filepath.Join(dest, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
 		}
 		return copyFile(path, target)
 	})

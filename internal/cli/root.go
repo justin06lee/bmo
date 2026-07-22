@@ -193,6 +193,9 @@ func newInspectCommand() *cobra.Command {
 			}
 			for _, skill := range skills {
 				fmt.Fprintf(cmd.OutOrStdout(), "Path: %s\nName: %s\nDescription: %s\nFiles: %d\n", skill.Path, skill.Name, skill.Description, skill.FileCount)
+				if skill.IgnoreRules > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "Excludes: %d .bmoignore rules applied\n", skill.IgnoreRules)
+				}
 				if len(skill.Agents) > 0 {
 					fmt.Fprintf(cmd.OutOrStdout(), "Subagents: %s\n", strings.Join(bmo.AgentNames(skill.Agents), ", "))
 				}
@@ -474,6 +477,9 @@ func selectSkill(root, name string) (bmo.Skill, error) {
 
 func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, scope bmo.Scope, dest, agentsDir string) {
 	fmt.Fprintf(cmd.OutOrStdout(), "Found skill: %s\nDescription: %s\n\nSource: %s\nScope: %s\nDestination: %s\nFiles: %d\n", skill.Name, skill.Description, source, scope, dest, skill.FileCount)
+	if skill.IgnoreRules > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Excludes: %d .bmoignore rules applied\n", skill.IgnoreRules)
+	}
 	if len(skill.Agents) > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Subagents: %s\nSubagent destination: %s\n",
 			strings.Join(bmo.AgentNames(skill.Agents), ", "), agentsDir)

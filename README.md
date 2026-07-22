@@ -34,6 +34,8 @@ It resolves a source (GitHub repo, local path, or zip URL), finds installable sk
 
 A skill can also bundle **subagents** in an `agents/` folder. Claude Code reads subagents from its agents directory rather than the skills tree, so bmo installs them there and tracks them against the skill — see [Subagents](#subagents).
 
+When the skill folder doubles as a working repository, a [`.bmoignore`](#bmoignore) file keeps tests, CI config, and demo assets out of the install.
+
 ## The bundled `bmo` skill
 
 `bmo` ships with its own tiny Claude Code skill baked into the binary (the
@@ -65,7 +67,7 @@ Because the skill is embedded in the binary, `bmo init` / `bmo add bmo` work
 
 `bmo` is **not** a marketplace, package registry, dependency manager, plugin installer, publisher, signing system, or background service.
 
-It does **not** execute downloaded code, run install hooks, or install dependencies.
+It does **not** execute downloaded code, run install hooks, or install dependencies. A skill that ships `requirements.txt` or `package.json` still needs you to install those yourself — bmo only flags their presence.
 
 ---
 
@@ -174,7 +176,7 @@ Preview a skill source without installing.
 bmo inspect SOURCE
 ```
 
-Shows the skill name, description, file count, notable files, and any executable file warnings. Useful for vetting a skill before running `add`.
+Shows the skill name, description, file count (after `.bmoignore` is applied), how many ignore rules ran, the subagents it would install, notable files, and any executable file warnings. Useful for vetting a skill before running `add`.
 
 ### `list`
 
@@ -231,6 +233,10 @@ untouched; changed ones are reinstalled (existing files overwritten, the
 original `InstalledAt` timestamp preserved). Skills tracked from the same
 source share a single download per run.
 
+The hash covers exactly the files an install would copy, so `.bmoignore`d paths
+never trigger a spurious update. Subagents are reconciled too: ones the new
+version no longer ships are removed.
+
 ### `doctor`
 
 Run system diagnostics.
@@ -285,6 +291,49 @@ Behavior:
 - Installing over a subagent bmo doesn't own requires `--force`. Existing files are moved aside first and restored if any later step fails.
 - The `agents/` folder is also copied inside the skill, so the install stays a faithful copy of the published tree.
 - `bmo doctor` reports subagents that went missing and files claimed by more than one skill.
+
+---
+
+## `.bmoignore`
+
+By default an install copies everything except `.git`, `node_modules`, `.venv`, and `__pycache__`. A `.bmoignore` file at the skill root excludes more — useful when the skill folder is also a working repository and you don't want its tests, CI config, or demo assets in the user's skills directory.
+
+```gitignore
+# Development-only trees
+tests/
+.github/
+screenshots/
+*.gif
+
+# Anchored to the skill root, so a nested build/ survives
+/build
+
+# ** spans path segments
+docs/**/*.png
+
+# A later ! line re-includes
+*.svg
+!logo.svg
+```
+
+| Form | Meaning |
+|------|---------|
+| `# text` | comment; blank lines are skipped |
+| `name` | matches that basename at any depth |
+| `name/` | directories only |
+| `/name` or `a/b` | anchored to the skill root |
+| `*`, `?` | wildcards within one path segment |
+| `**` | spans zero or more segments |
+| `!name` | re-includes something an earlier line excluded |
+
+Two deliberate deviations from a naive reading:
+
+- **`SKILL.md` at the skill root is never ignorable**, so a broad `*.md` cannot produce an install that fails its own validation.
+- **A negation cannot rescue a file inside an excluded directory.** `vendor/` followed by `!vendor/keep.txt` still excludes `keep.txt` — the same rule git applies. Use `vendor/*` when you need exceptions.
+
+The rules apply to every walk: which files are copied, which subagents are installed, which folders are discovered as skills, and the content hash `bmo update` compares. Because the copier and the hasher share one walk, excluded files never register as phantom changes that make `update` reinstall on every run.
+
+`.bmoignore` is read from the skill root only — nested ignore files have no effect — and the file itself is installed, so the skill on disk documents what was left out.
 
 ### Picking a scope: `here` / `everywhere`
 

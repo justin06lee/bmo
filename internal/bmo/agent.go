@@ -46,12 +46,22 @@ func DiscoverAgents(skillDir string) ([]Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An agent file excluded by .bmoignore is not installed, so it must not be
+	// discovered either: tracking a subagent that was never copied would make
+	// doctor report it as missing forever.
+	ignore, err := LoadIgnore(skillDir)
+	if err != nil {
+		return nil, err
+	}
 	var agents []Agent
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+			continue
+		}
+		if ignore.Match(AgentsDirName+"/"+entry.Name(), false) {
 			continue
 		}
 		if entry.Type()&fs.ModeSymlink != 0 {
