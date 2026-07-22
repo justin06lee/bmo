@@ -10,6 +10,10 @@ folder containing a `SKILL.md` file. `bmo` resolves a source (GitHub repo,
 local folder, or zip URL), validates the skill, copies it into Claude Code's
 skills directory, and tracks it so it can be listed, updated, or removed.
 
+A skill may also bundle **subagents** in an `agents/` folder. Those are
+installed into Claude Code's agents directory and tracked with the skill, so
+`bmo remove` takes them away again. See "Shipping subagents with a skill".
+
 It **only copies files** — it never executes downloaded code, runs install
 hooks, or installs dependencies.
 
@@ -24,7 +28,7 @@ user to run `go install github.com/justin06lee/bmo@latest`.
 ### Core commands
 
 ```bash
-bmo add SOURCE        # install a skill
+bmo add SOURCE        # install a skill (and any subagents it bundles)
 bmo inspect SOURCE    # preview a skill without installing
 bmo list              # list installed skills (both scopes)
 bmo update            # re-check every tracked skill, reinstall the changed ones
@@ -58,10 +62,11 @@ A bare `owner/repo` is treated as GitHub. When no ref is given, bmo tries the
 `add`, `init`, `list`, `remove`, and `update` accept an optional location
 keyword as a plain positional word, before or after the other argument:
 
-- **`here`** — the current project (`./.claude/skills`, metadata in
-  `.claude/bmo-lock.json`)
+- **`here`** — the current project (`./.claude/skills`, subagents in
+  `./.claude/agents`, metadata in `.claude/bmo-lock.json`)
 - **`everywhere`** — global, the default (`$CLAUDE_CONFIG_DIR/skills/` or
-  `~/.claude/skills/`, metadata in `~/.bmo/skills.json`)
+  `~/.claude/skills/`, subagents in the sibling `agents/` directory, metadata in
+  `~/.bmo/skills.json`)
 
 ```bash
 bmo add owner/repo here       # install into this project
@@ -105,7 +110,8 @@ Whenever you create or restructure a skill, follow this contract exactly so
 my-skill/                 <- folder name: lowercase letters, digits, hyphens only
 ├── SKILL.md              <- required, at the folder root, frontmatter first
 ├── references/           <- optional supporting files, copied verbatim
-└── scripts/              <- optional; executable files are allowed but flagged
+├── scripts/              <- optional; executable files are allowed but flagged
+└── agents/               <- optional subagent definitions, installed separately
 ```
 
 `SKILL.md` must **begin** with YAML frontmatter fenced by `---` lines — no
@@ -133,6 +139,49 @@ Instructions for Claude go here.
   every run of other characters collapsed to a single `-`. Prefer setting
   `name` explicitly.
 
+### Shipping subagents with a skill
+
+A skill may bundle Claude Code **subagents** in an `agents/` folder. A subagent
+is not a skill: a skill loads instructions into the current context, while a
+subagent is a separate worker with its own context window, model, and tool
+allowlist, spawned by name and able to run in parallel with others.
+
+Claude Code discovers subagents from its **agents** directory, which sits beside
+the skills directory, so bmo installs them to a second destination:
+
+| Scope | Skill goes to | Subagents go to |
+|-------|---------------|-----------------|
+| `everywhere` (global) | `~/.claude/skills/<name>/` | `~/.claude/agents/` |
+| `here` (project) | `./.claude/skills/<name>/` | `./.claude/agents/` |
+
+```markdown
+---
+name: my-specialist
+description: What this worker does and when to hand work to it.
+model: sonnet
+tools: Read, Grep, Glob
+---
+
+You are a specialist. When given …
+```
+
+Rules for `agents/`:
+
+- Only top-level `*.md` files are installed. Claude Code does not scan nested
+  folders, so bmo refuses to install them rather than create subagents that
+  never resolve.
+- Each file needs frontmatter with a non-empty `description`, exactly like a
+  skill. `name` is optional; the filename stem is used when it's absent, and it
+  must match `^[a-z0-9-]+$`.
+- The file is installed under the name you shipped it as, and recorded in bmo's
+  metadata. `bmo remove` deletes exactly those files and nothing else, so
+  hand-written subagents in the same directory are never touched.
+- `bmo update` reconciles: subagents the new version drops are removed.
+- Installing over a subagent bmo doesn't own (yours, or another skill's) is
+  refused unless you pass `--force`.
+- `agents/` is also copied inside the skill folder, so the installed skill stays
+  a faithful copy of what you published.
+
 ### Hard rules (install fails if violated)
 
 - `SKILL.md` must exist at the skill folder's root and start with frontmatter.
@@ -140,6 +189,11 @@ Instructions for Claude go here.
 - `description` must be non-empty.
 - The resolved name must match `^[a-z0-9-]+$` (≤ 64 chars).
 - **No symlinks anywhere in the tree** — the copy refuses them outright.
+- Every `agents/*.md` file must parse, carry a non-empty `description`, and
+  resolve to a valid name. A malformed subagent fails the whole install rather
+  than being skipped silently.
+- A subagent filename that collides with one bmo didn't install requires
+  `--force`.
 
 ### Silently ignored / limits
 

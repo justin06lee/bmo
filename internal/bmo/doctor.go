@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 type DoctorStatus string
@@ -39,6 +41,7 @@ func RunDoctor(cwd string) []DoctorCheck {
 	checks = append(checks, checkMetadata("Project metadata", projectMeta))
 	checks = append(checks, checkMetadataEntries(projectMeta)...)
 	checks = append(checks, checkDuplicates(cwd)...)
+	checks = append(checks, checkAgents(cwd)...)
 	if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 		checks = append(checks, DoctorCheck{DoctorOK, "CLAUDE_CONFIG_DIR is set"})
 	}
@@ -91,6 +94,61 @@ func checkMetadataEntries(path string) []DoctorCheck {
 	}
 	if len(meta.Skills) > 0 {
 		checks = append(checks, DoctorCheck{DoctorOK, fmt.Sprintf("%d tracked skills are valid", valid)})
+	}
+	return checks
+}
+
+// checkAgents verifies that every subagent bmo installed on a skill's behalf is
+// still on disk, and that no two skills in the same scope claim the same
+// subagent file — a collision means one skill's specialist silently answers for
+// the other.
+func checkAgents(cwd string) []DoctorCheck {
+	var checks []DoctorCheck
+	globalMeta, err := GlobalMetadataPath()
+	if err != nil {
+		return nil
+	}
+	globalAgents, err := GlobalAgentsDir()
+	if err != nil {
+		return nil
+	}
+	scopes := []struct {
+		label     string
+		metaPath  string
+		agentsDir string
+	}{
+		{"global", globalMeta, globalAgents},
+		{"project", ProjectMetadataPath(cwd), ProjectAgentsDir(cwd)},
+	}
+	for _, scope := range scopes {
+		meta, err := ReadMetadata(scope.metaPath)
+		if err != nil {
+			continue
+		}
+		owners := map[string][]string{}
+		installed := 0
+		for name, entry := range meta.Skills {
+			for _, file := range entry.Agents {
+				owners[file] = append(owners[file], name)
+				if _, err := os.Stat(filepath.Join(scope.agentsDir, file)); err != nil {
+					checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf(
+						"Skill %s is missing its installed subagent (%s scope): %s", name, scope.label, file)})
+					continue
+				}
+				installed++
+			}
+		}
+		for file, names := range owners {
+			if len(names) > 1 {
+				sort.Strings(names)
+				checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf(
+					"Subagent %s is claimed by more than one %s skill: %s", file, scope.label, strings.Join(names, ", "))})
+			}
+		}
+		if installed > 0 {
+			checks = append(checks, DoctorCheck{DoctorOK, fmt.Sprintf(
+				"%d installed subagents are present (%s scope): %s", installed, scope.label, scope.agentsDir)})
+		}
 	}
 	return checks
 }

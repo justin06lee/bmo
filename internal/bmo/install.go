@@ -54,6 +54,25 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 	if destErr == nil && !opts.Force {
 		return SkillMeta{}, fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
 	}
+	agentsDir, err := AgentsDir(opts.Scope, opts.CWD)
+	if err != nil {
+		return SkillMeta{}, err
+	}
+	// Agent files this skill already owns are fair game to overwrite; anything
+	// else in the agents directory belongs to the user or another skill.
+	owned := map[string]bool{}
+	if existing != nil {
+		for _, file := range existing.Agents {
+			owned[file] = true
+		}
+	}
+	if !opts.Force {
+		if conflicts := agentConflicts(skill.Agents, agentsDir, owned); len(conflicts) > 0 {
+			return SkillMeta{}, fmt.Errorf(
+				"subagent already exists and is not owned by %s: %s; use --force to replace it",
+				skill.Name, strings.Join(conflicts, ", "))
+		}
+	}
 	if opts.DryRun {
 		return next, nil
 	}
@@ -67,20 +86,34 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 			return SkillMeta{}, err
 		}
 	}
-	if err := CopyDir(skill.Path, dest); err != nil {
-		if backup != "" {
-			os.RemoveAll(dest)
-			os.Rename(backup, dest)
-		}
-		return SkillMeta{}, err
-	}
-	meta.Skills[skill.Name] = next
-	if err := WriteMetadata(metadataPath, meta); err != nil {
+	restoreSkill := func() {
 		os.RemoveAll(dest)
 		if backup != "" {
 			os.Rename(backup, dest)
 		}
+	}
+	if err := CopyDir(skill.Path, dest); err != nil {
+		restoreSkill()
 		return SkillMeta{}, err
+	}
+	rollbackAgents, commitAgents, err := installAgents(skill.Agents, skill.Path, agentsDir)
+	if err != nil {
+		restoreSkill()
+		return SkillMeta{}, err
+	}
+	meta.Skills[skill.Name] = next
+	if err := WriteMetadata(metadataPath, meta); err != nil {
+		rollbackAgents()
+		restoreSkill()
+		return SkillMeta{}, err
+	}
+	commitAgents()
+	// Subagents the previous version shipped and this one dropped would
+	// otherwise linger in the agents directory forever.
+	if existing != nil {
+		if stale := staleAgents(existing.Agents, skill.Agents); len(stale) > 0 {
+			removeAgents(stale, agentsDir)
+		}
 	}
 	if backup != "" {
 		os.RemoveAll(backup)
@@ -106,6 +139,15 @@ func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
 	}
 	if err := os.RemoveAll(entry.InstalledPath); err != nil {
 		return SkillMeta{}, err
+	}
+	if len(entry.Agents) > 0 {
+		agentsDir, err := AgentsDir(scope, cwd)
+		if err != nil {
+			return SkillMeta{}, err
+		}
+		if err := removeAgents(entry.Agents, agentsDir); err != nil {
+			return SkillMeta{}, err
+		}
 	}
 	delete(meta.Skills, name)
 	if err := WriteMetadata(metadataPath, meta); err != nil {
@@ -162,23 +204,35 @@ func CopyDir(src, dest string) error {
 		if d.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("refusing to copy symlink: %s", path)
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode())
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			out.Close()
-			return err
-		}
-		return out.Close()
+		return copyFile(path, target)
 	})
+}
+
+// copyFile copies one regular file, preserving its mode and refusing to
+// clobber an existing destination.
+func copyFile(src, dest string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to copy symlink: %s", src)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refusing to copy non-regular file: %s", src)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

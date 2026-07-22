@@ -27,6 +27,32 @@ func ProjectSkillsDir(cwd string) string {
 	return filepath.Join(cwd, ".claude", "skills")
 }
 
+// GlobalAgentsDir returns the directory Claude Code scans for global subagent
+// definitions. It sits beside the skills directory, which is why a skill's
+// bundled agents/ folder cannot simply be copied in place with the skill.
+func GlobalAgentsDir() (string, error) {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return filepath.Join(dir, "agents"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude", "agents"), nil
+}
+
+func ProjectAgentsDir(cwd string) string {
+	return filepath.Join(cwd, ".claude", "agents")
+}
+
+// AgentsDir resolves the subagent directory for a scope, mirroring ScopePaths.
+func AgentsDir(scope Scope, cwd string) (string, error) {
+	if scope == ScopeProject {
+		return ProjectAgentsDir(cwd), nil
+	}
+	return GlobalAgentsDir()
+}
+
 func GlobalMetadataPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

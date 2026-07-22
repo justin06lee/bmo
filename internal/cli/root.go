@@ -94,7 +94,11 @@ func newAddCommand(opts *options) *cobra.Command {
 			if _, err := os.Stat(dest); err == nil && !opts.force && !opts.dryRun {
 				return fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
 			}
-			printSkillPreview(cmd, skill, src.Raw, scope, dest)
+			agentsDir, err := bmo.AgentsDir(scope, cwd)
+			if err != nil {
+				return err
+			}
+			printSkillPreview(cmd, skill, src.Raw, scope, dest, agentsDir)
 			if !opts.yes && !opts.dryRun {
 				ok, err := confirm(cmd, "Install? [y/N] ")
 				if err != nil {
@@ -120,7 +124,12 @@ func newAddCommand(opts *options) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Dry run: would install %s to %s\n", meta.Name, meta.InstalledPath)
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in Claude Code:\n  /%s\n", meta.Name, meta.InstalledPath, meta.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n", meta.Name, meta.InstalledPath)
+			if len(meta.Agents) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "Installed %d subagents to %s: %s\n",
+					len(meta.Agents), agentsDir, strings.Join(bmo.AgentNames(skill.Agents), ", "))
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "\nUse it in Claude Code:\n  /%s\n", meta.Name)
 			return nil
 		},
 	}
@@ -184,6 +193,9 @@ func newInspectCommand() *cobra.Command {
 			}
 			for _, skill := range skills {
 				fmt.Fprintf(cmd.OutOrStdout(), "Path: %s\nName: %s\nDescription: %s\nFiles: %d\n", skill.Path, skill.Name, skill.Description, skill.FileCount)
+				if len(skill.Agents) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "Subagents: %s\n", strings.Join(bmo.AgentNames(skill.Agents), ", "))
+				}
 				if len(skill.NotableFiles) > 0 {
 					fmt.Fprintf(cmd.OutOrStdout(), "Notable files: %s\n", strings.Join(skill.NotableFiles, ", "))
 				}
@@ -268,6 +280,14 @@ func newRemoveCommand(opts *options) *cobra.Command {
 				return fmt.Errorf("skill is not tracked by bmo in %s scope: %s\nTry: bmo list, or bmo doctor", scope, args[0])
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Remove %s from %s\n", entry.Name, entry.InstalledPath)
+			if len(entry.Agents) > 0 {
+				agentsDir, err := bmo.AgentsDir(scope, cwd)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Also removes %d subagents from %s: %s\n",
+					len(entry.Agents), agentsDir, strings.Join(entry.Agents, ", "))
+			}
 			if !opts.yes {
 				ok, err := confirm(cmd, "Remove? [y/N] ")
 				if err != nil {
@@ -452,8 +472,12 @@ func selectSkill(root, name string) (bmo.Skill, error) {
 	return bmo.Skill{}, fmt.Errorf("multiple skills found; use --name to choose one: %s", strings.Join(names, ", "))
 }
 
-func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, scope bmo.Scope, dest string) {
+func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, scope bmo.Scope, dest, agentsDir string) {
 	fmt.Fprintf(cmd.OutOrStdout(), "Found skill: %s\nDescription: %s\n\nSource: %s\nScope: %s\nDestination: %s\nFiles: %d\n", skill.Name, skill.Description, source, scope, dest, skill.FileCount)
+	if len(skill.Agents) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Subagents: %s\nSubagent destination: %s\n",
+			strings.Join(bmo.AgentNames(skill.Agents), ", "), agentsDir)
+	}
 	if len(skill.ExecutableFiles) > 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "\nThis skill includes executable-looking files:")
 		for _, file := range skill.ExecutableFiles {

@@ -22,6 +22,10 @@ type SkillMeta struct {
 	UpdatedAt     string `json:"updated_at"`
 	SourceRef     string `json:"source_ref,omitempty"`
 	SourceType    string `json:"source_type"`
+	// Agents lists the subagent filenames this skill installed into the
+	// scope's agents directory. Tracking them by name is what makes removal
+	// exact: bmo deletes only the files it wrote.
+	Agents []string `json:"agents,omitempty"`
 }
 
 func EmptyMetadata() Metadata {
@@ -99,6 +103,7 @@ func NewSkillMeta(skill Skill, scope Scope, source Source, installedPath string,
 	return SkillMeta{
 		Name:          skill.Name,
 		Description:   skill.Description,
+		Agents:        AgentFiles(skill.Agents),
 		Scope:         scope,
 		Source:        source.Raw,
 		InstalledPath: installedPath,

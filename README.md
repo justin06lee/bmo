@@ -32,6 +32,8 @@ bmo add bmo    # ...or restore it if you deleted it
 
 It resolves a source (GitHub repo, local path, or zip URL), finds installable skill folders, validates the `SKILL.md` frontmatter, copies the selected folder into Claude Code's skills directory, and records metadata so the skill can be listed, updated, or removed later.
 
+A skill can also bundle **subagents** in an `agents/` folder. Claude Code reads subagents from its agents directory rather than the skills tree, so bmo installs them there and tracks them against the skill — see [Subagents](#subagents).
+
 ## The bundled `bmo` skill
 
 `bmo` ships with its own tiny Claude Code skill baked into the binary (the
@@ -129,7 +131,7 @@ bmo add SOURCE [--project] [--name NAME] [--force] [--yes] [--dry-run]
 |------|-------------|
 | `--project` | Install to the current project's `.claude/skills/` instead of globally |
 | `--name` | Override the skill name (must match `^[a-z0-9-]+$`) |
-| `--force` | Overwrite an existing installation with the same name |
+| `--force` | Overwrite an existing installation with the same name, or a subagent bmo doesn't own |
 | `--yes` | Skip all confirmation prompts |
 | `--dry-run` | Show what would be installed without writing anything |
 
@@ -204,7 +206,7 @@ bmo remove SKILL_NAME [--project] [--global] [--yes]
 | `--global` | Remove from the global install directory |
 | `--yes` | Skip confirmation |
 
-Removes the skill directory from disk and its entry from the metadata file.
+Removes the skill directory from disk and its entry from the metadata file. Any subagents the skill installed are deleted too — only the exact files bmo recorded, so hand-written subagents sharing the directory are left alone.
 
 ### `update`
 
@@ -264,6 +266,26 @@ Project metadata is stored at `<project-root>/.claude/bmo-lock.json`.
 
 Both scopes can coexist. A skill name collision across scopes triggers a warning during `bmo doctor`.
 
+### Subagents
+
+A skill may ship Claude Code subagents in an `agents/` folder. A subagent is a separate worker with its own context window, model, and tool allowlist, spawned by name and able to run in parallel — as opposed to a skill, which loads instructions into the current context.
+
+Claude Code discovers subagents from its agents directory, beside the skills directory, so bmo installs them to a second destination that follows the same scope:
+
+| Scope | Skill | Subagents |
+|-------|-------|-----------|
+| Global | `~/.claude/skills/<name>/` (or `$CLAUDE_CONFIG_DIR/skills/`) | `~/.claude/agents/` (or `$CLAUDE_CONFIG_DIR/agents/`) |
+| Project | `<project-root>/.claude/skills/<name>/` | `<project-root>/.claude/agents/` |
+
+Behavior:
+
+- Only top-level `agents/*.md` files are installed; nested folders are ignored because Claude Code does not scan them.
+- Each file must parse as frontmatter with a non-empty `description`. `name` defaults to the filename stem and must match `^[a-z0-9-]+$`. A malformed subagent fails the install rather than being skipped.
+- Installed filenames are recorded in metadata, so `bmo remove` deletes exactly those files, and `bmo update` removes subagents a new version no longer ships.
+- Installing over a subagent bmo doesn't own requires `--force`. Existing files are moved aside first and restored if any later step fails.
+- The `agents/` folder is also copied inside the skill, so the install stays a faithful copy of the published tree.
+- `bmo doctor` reports subagents that went missing and files claimed by more than one skill.
+
 ### Picking a scope: `here` / `everywhere`
 
 `add`, `init`, `list`, `remove`, and `update` take an optional location keyword
@@ -301,13 +323,14 @@ Additional hardening:
 - **Zip-slip protection** — entries in downloaded archives that resolve outside the extraction directory are rejected.
 - **Size caps** — downloads and extracted archives are bounded (256 MiB) to guard against decompression bombs.
 - **No symlink following** — `bmo` refuses to copy symlinks when installing a skill, so a skill folder can't read files outside its tree.
-- **Scoped removal** — `bmo remove` refuses to delete anything outside the managed skills directory.
+- **Scoped removal** — `bmo remove` refuses to delete anything outside the managed skills directory, and deletes only the subagent files recorded in metadata.
+- **No silent subagent takeover** — installing over a subagent bmo didn't write requires `--force`, so one skill can't quietly replace another's specialist.
 
 ---
 
 ## Metadata
 
-Metadata is stored as JSON and records every installed skill's name, description, source, path, install times, and scope.
+Metadata is stored as JSON and records every installed skill's name, description, source, path, install times, scope, and the subagent files it installed.
 
 Writes are **atomic** — bmo writes to a temporary file first, syncs it to disk, then renames it over the target. Partial writes are never visible.
 
