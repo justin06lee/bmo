@@ -121,6 +121,53 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 	return next, nil
 }
 
+// Conflict describes something that would be overwritten by an install.
+type Conflict struct {
+	Skill string
+	// Path is the installed skill directory, set when the skill already exists.
+	Path string
+	// Agents lists subagent files owned by someone else, if any.
+	Agents []string
+}
+
+// CheckInstallConflicts reports what an install of skill would overwrite.
+//
+// Batch installs use this to decide before writing anything: a partial install
+// that stops halfway through leaves the user with an incoherent set of skills,
+// so every conflict is surfaced up front.
+func CheckInstallConflicts(skill Skill, scope Scope, cwd string) (Conflict, error) {
+	skillsDir, metadataPath, err := ScopePaths(scope, cwd)
+	if err != nil {
+		return Conflict{}, err
+	}
+	conflict := Conflict{Skill: skill.Name}
+	dest := filepath.Join(skillsDir, skill.Name)
+	if _, err := os.Stat(dest); err == nil {
+		conflict.Path = dest
+	}
+	agentsDir, err := AgentsDir(scope, cwd)
+	if err != nil {
+		return Conflict{}, err
+	}
+	meta, err := ReadMetadata(metadataPath)
+	if err != nil {
+		return Conflict{}, err
+	}
+	owned := map[string]bool{}
+	if existing, ok := meta.Skills[skill.Name]; ok {
+		for _, file := range existing.Agents {
+			owned[file] = true
+		}
+	}
+	conflict.Agents = agentConflicts(skill.Agents, agentsDir, owned)
+	return conflict, nil
+}
+
+// Empty reports whether the install would overwrite nothing.
+func (c Conflict) Empty() bool {
+	return c.Path == "" && len(c.Agents) == 0
+}
+
 func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
 	skillsDir, metadataPath, err := ScopePaths(scope, cwd)
 	if err != nil {
