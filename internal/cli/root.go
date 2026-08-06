@@ -396,10 +396,7 @@ func newListCommand(opts *options) *cobra.Command {
 				}
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "NAME\tSCOPE\tSOURCE\tPATH\tUPDATED")
-			for _, entry := range entries {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\t%s\n", entry.Name, entry.Scope, entry.Source, entry.InstalledPath, entry.UpdatedAt)
-			}
+			printSkillList(cmd.OutOrStdout(), entries, cwd, time.Now())
 			return nil
 		},
 	}
