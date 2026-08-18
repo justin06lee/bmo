@@ -85,8 +85,11 @@ go install github.com/justin06lee/bmo@latest
 ```bash
 git clone https://github.com/justin06lee/bmo
 cd bmo
-go build -o bmo .
+make        # build and install onto your PATH
 ```
+
+`make build` produces the `./bmo` binary only; `make update` refreshes an
+already-installed copy; `make test` runs vet and the test suite.
 
 ---
 
