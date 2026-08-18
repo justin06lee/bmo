@@ -252,6 +252,23 @@ The hash covers exactly the files an install would copy, so `.bmoignore`d paths
 never trigger a spurious update. Subagents are reconciled too: ones the new
 version no longer ships are removed.
 
+#### `bmo update everywhere`: every repo at once
+
+On `update`, the `everywhere` keyword means more than "global scope": it walks
+**every project bmo has ever installed into**, without you cd-ing anywhere.
+
+```bash
+bmo update everywhere              # global skills + every registered repo
+bmo update cool-skill everywhere   # one skill, wherever it is tracked
+```
+
+Every project-scope install records its repo in a registry at
+`~/.bmo/projects.json`, and `update everywhere` visits each recorded repo in
+turn (repos whose directory has vanished are skipped with a note; `bmo doctor`
+lists them). Repos installed into before the registry existed are backfilled
+the first time any `bmo update` runs inside them. Sources shared across repos
+are still downloaded only once per run.
+
 ### `doctor`
 
 Run system diagnostics.
@@ -373,6 +390,10 @@ The keyword may appear before or after the other argument, so
 `bmo add here owner/repo` works too. Commands default to **global** when no
 keyword or flag is given (`bmo list` with neither still lists both scopes). The
 `--project` / `--global` flags continue to work and can be used interchangeably.
+
+One exception: on `update`, `everywhere` reaches further than the global scope —
+it also updates every registered project repo. See
+[`bmo update everywhere`](#bmo-update-everywhere-every-repo-at-once).
 
 ---
 

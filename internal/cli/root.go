@@ -484,13 +484,8 @@ func newUpdateCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			applyKeywordFilter(keyword, opts)
 			if len(args) == 0 {
 				opts.all = true
-			}
-			scopes := []bmo.Scope{selectedScope(opts)}
-			if opts.all && !opts.project && !opts.global {
-				scopes = []bmo.Scope{bmo.ScopeGlobal, bmo.ScopeProject}
 			}
 			// Skills tracked from the same source share one download per run.
 			cache := map[string]bmo.ResolvedSource{}
@@ -499,6 +494,16 @@ func newUpdateCommand(opts *options) *cobra.Command {
 					cleanupResolved(resolved)
 				}
 			}()
+			// On update, "everywhere" reaches past the current directory:
+			// global skills plus every project bmo has ever installed into.
+			if keyword == "everywhere" {
+				return updateEverywhere(cmd, cwd, args, opts, cache)
+			}
+			applyKeywordFilter(keyword, opts)
+			scopes := []bmo.Scope{selectedScope(opts)}
+			if opts.all && !opts.project && !opts.global {
+				scopes = []bmo.Scope{bmo.ScopeGlobal, bmo.ScopeProject}
+			}
 			for _, scope := range scopes {
 				if err := updateScope(cmd, cwd, scope, args, opts, cache); err != nil {
 					return err
@@ -787,6 +792,79 @@ func listEntries(cwd string, opts *options) ([]bmo.SkillMeta, error) {
 		return entries[i].Name < entries[j].Name
 	})
 	return entries, nil
+}
+
+// updateEverywhere updates the global scope plus every project recorded in
+// the registry, so `bmo update everywhere` reaches repos without being run
+// inside them. With a skill name, only the places tracking that skill run.
+func updateEverywhere(cmd *cobra.Command, cwd string, args []string, opts *options, cache map[string]bmo.ResolvedSource) error {
+	out := cmd.OutOrStdout()
+	// Backfill: repos installed into before the registry existed register the
+	// first time an update runs inside them.
+	if hasTrackedSkills(bmo.ProjectMetadataPath(cwd)) {
+		_ = bmo.RecordProject(cwd)
+	}
+	named := ""
+	if len(args) == 1 {
+		named = args[0]
+	}
+	globalPath, err := bmo.GlobalMetadataPath()
+	if err != nil {
+		return err
+	}
+	found := false
+	if (named == "" && hasTrackedSkills(globalPath)) || (named != "" && metadataHasSkill(globalPath, named)) {
+		fmt.Fprintln(out, "Global:")
+		if err := updateScope(cmd, cwd, bmo.ScopeGlobal, args, opts, cache); err != nil {
+			return err
+		}
+		found = true
+	}
+	projects, err := bmo.RegisteredProjects()
+	if err != nil {
+		return err
+	}
+	for _, dir := range projects {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			fmt.Fprintf(out, "\nSkipping %s (directory no longer exists)\n", dir)
+			continue
+		}
+		metaPath := bmo.ProjectMetadataPath(dir)
+		if (named == "" && !hasTrackedSkills(metaPath)) || (named != "" && !metadataHasSkill(metaPath, named)) {
+			continue
+		}
+		if found {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintf(out, "%s:\n", dir)
+		if err := updateScope(cmd, dir, bmo.ScopeProject, args, opts, cache); err != nil {
+			return err
+		}
+		found = true
+	}
+	if !found {
+		if named != "" {
+			return fmt.Errorf("skill is not tracked by bmo anywhere: %s", named)
+		}
+		fmt.Fprintln(out, "No tracked skills anywhere yet.")
+	}
+	return nil
+}
+
+// hasTrackedSkills reports whether the metadata file at path tracks anything.
+func hasTrackedSkills(path string) bool {
+	meta, err := bmo.ReadMetadata(path)
+	return err == nil && len(meta.Skills) > 0
+}
+
+// metadataHasSkill reports whether the metadata file at path tracks name.
+func metadataHasSkill(path, name string) bool {
+	meta, err := bmo.ReadMetadata(path)
+	if err != nil {
+		return false
+	}
+	_, ok := meta.Skills[name]
+	return ok
 }
 
 func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string, opts *options, cache map[string]bmo.ResolvedSource) error {

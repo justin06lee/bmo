@@ -85,6 +85,11 @@ with no keyword or flag cover both scopes.
 content hash against the installed copy, reinstalls only what changed, and
 reports everything else as `up to date`. Use `--dry-run` to preview.
 
+`bmo update everywhere` goes further than the global scope: it also visits
+**every repo bmo has ever installed into** (each project-scope install records
+its repo in `~/.bmo/projects.json`) and updates their skills too — no need to
+cd into each repo. Vanished repos are skipped with a note.
+
 ### Installing a whole suite
 
 Repositories that ship several skills meant to work together install in one go

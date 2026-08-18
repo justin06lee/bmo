@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -321,5 +322,102 @@ func TestUpdateSkipsUnchangedAndUpdatesChanged(t *testing.T) {
 
 	if got := runUpdate(); got != "demo is up to date\n" {
 		t.Fatalf("expected second update after refresh to be a no-op, got %q", got)
+	}
+}
+
+func TestUpdateEverywhereReachesRegisteredProjects(t *testing.T) {
+	isolateHome(t)
+	cwd := t.TempDir() // where the command runs; not itself a bmo project
+
+	// Source skill, installed into a separate project directory.
+	srcDir := filepath.Join(t.TempDir(), "demo")
+	skillMD := filepath.Join(srcDir, "SKILL.md")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skillMD, []byte("---\nname: demo\ndescription: d\n---\nv1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	src, err := bmo.ParseSource(srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err := bmo.ValidateSkill(srcDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bmo.InstallSkill(bmo.InstallOptions{Scope: bmo.ScopeProject, CWD: project, Source: src, Skill: skill}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Installing into a project scope must have recorded the project.
+	projects, err := bmo.RegisteredProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0] != project {
+		t.Fatalf("expected registry to hold %q, got %v", project, projects)
+	}
+
+	runEverywhere := func() string {
+		t.Helper()
+		out := &bytes.Buffer{}
+		cmd := &cobra.Command{}
+		cmd.SetOut(out)
+		cache := map[string]bmo.ResolvedSource{}
+		defer func() {
+			for _, resolved := range cache {
+				cleanupResolved(resolved)
+			}
+		}()
+		if err := updateEverywhere(cmd, cwd, nil, &options{all: true}, cache); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+
+	out := runEverywhere()
+	if !strings.Contains(out, project+":") || !strings.Contains(out, "demo is up to date") {
+		t.Fatalf("expected registered project to be visited, got %q", out)
+	}
+
+	// Change the source: everywhere must update the project install.
+	if err := os.WriteFile(skillMD, []byte("---\nname: demo\ndescription: d\n---\nv2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out = runEverywhere()
+	if !strings.Contains(out, "Updated demo") {
+		t.Fatalf("expected changed skill in registered project to update, got %q", out)
+	}
+	data, err := os.ReadFile(filepath.Join(project, ".claude", "skills", "demo", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("v2")) {
+		t.Fatalf("expected project install to carry new content, got %q", data)
+	}
+}
+
+func TestUpdateEverywhereSkipsMissingProjects(t *testing.T) {
+	isolateHome(t)
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.MkdirAll(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := bmo.RecordProject(gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(out)
+	if err := updateEverywhere(cmd, t.TempDir(), nil, &options{all: true}, map[string]bmo.ResolvedSource{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Skipping "+gone) {
+		t.Fatalf("expected missing project to be skipped with a note, got %q", out.String())
 	}
 }
