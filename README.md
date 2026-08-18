@@ -1,14 +1,15 @@
-<p align="center">
-  <img src="bmo.png" width="360" alt="BMO">
-</p>
+<div align="center">
 
-<h1 align="center">bmo</h1>
+<img src="assets/bmo.svg" alt="bmo" width="460" />
 
-<p align="center">
-  A tiny installer for Claude Code skills.
-  <br>
-  No marketplaces. No plugin wrappers. No manual cloning.
-</p>
+# bmo
+
+**A tiny installer for Claude Code skills.**<br>
+*No marketplaces. No plugin wrappers. No manual cloning.*
+
+</div>
+
+---
 
 ```bash
 bmo add owner/repo
@@ -84,8 +85,11 @@ go install github.com/justin06lee/bmo@latest
 ```bash
 git clone https://github.com/justin06lee/bmo
 cd bmo
-go build -o bmo .
+make        # build and install onto your PATH
 ```
+
+`make build` produces the `./bmo` binary only; `make update` refreshes an
+already-installed copy; `make test` runs vet and the test suite.
 
 ---
 
