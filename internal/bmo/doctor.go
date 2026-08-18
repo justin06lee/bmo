@@ -41,6 +41,7 @@ func RunDoctor(cwd string) []DoctorCheck {
 	checks = append(checks, checkMetadata("Project metadata", projectMeta))
 	checks = append(checks, checkMetadataEntries(projectMeta)...)
 	checks = append(checks, checkDuplicates(cwd)...)
+	checks = append(checks, checkProjectRegistry()...)
 	checks = append(checks, checkAgents(cwd)...)
 	if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 		checks = append(checks, DoctorCheck{DoctorOK, "CLAUDE_CONFIG_DIR is set"})
@@ -166,5 +167,28 @@ func checkDuplicates(cwd string) []DoctorCheck {
 			checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf("Duplicate skill name in project and global metadata: %s", name)})
 		}
 	}
+	return checks
+}
+
+// checkProjectRegistry reports the projects recorded for `bmo update
+// everywhere`, warning about entries whose directory no longer exists.
+func checkProjectRegistry() []DoctorCheck {
+	projects, err := RegisteredProjects()
+	if err != nil {
+		return []DoctorCheck{{DoctorError, fmt.Sprintf("Project registry: %v", err)}}
+	}
+	if len(projects) == 0 {
+		return nil
+	}
+	var checks []DoctorCheck
+	live := 0
+	for _, dir := range projects {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf("Registered project no longer exists: %s", dir)})
+			continue
+		}
+		live++
+	}
+	checks = append(checks, DoctorCheck{DoctorOK, fmt.Sprintf("%d registered projects for `bmo update everywhere`", live)})
 	return checks
 }

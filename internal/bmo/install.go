@@ -118,6 +118,12 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 	if backup != "" {
 		os.RemoveAll(backup)
 	}
+	// Remember which repos bmo has installed into so `bmo update everywhere`
+	// can find them later. Best-effort: a registry failure must not fail an
+	// install that already succeeded.
+	if opts.Scope == ScopeProject {
+		_ = RecordProject(opts.CWD)
+	}
 	return next, nil
 }
 
