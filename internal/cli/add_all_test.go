@@ -89,6 +89,109 @@ func TestAddAllInstallsEverySkillAndItsAgents(t *testing.T) {
 	}
 }
 
+func TestAddAllForCodexKeepsSameNamedAgentResourcesIsolated(t *testing.T) {
+	home := t.TempDir()
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha", "worker")
+	writeSourceSkill(t, src, "beta", "worker")
+
+	out, err := runBmo(t, home, "add", src, "--all", "--yes", "--harness", "codex")
+	if err != nil {
+		t.Fatalf("portable add --all failed: %v\n%s", err, out)
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := os.Stat(filepath.Join(home, ".agents", "skills", name, "agents", "worker.md")); err != nil {
+			t.Fatalf("expected %s's isolated agent resource: %v", name, err)
+		}
+	}
+}
+
+func TestAddAcceptsPositionalHarness(t *testing.T) {
+	home := t.TempDir()
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+
+	out, err := runBmo(t, home, "add", src, "codex", "--yes")
+	if err != nil {
+		t.Fatalf("positional harness install failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "alpha", "SKILL.md")); err != nil {
+		t.Fatalf("expected Codex install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "alpha")); !os.IsNotExist(err) {
+		t.Fatalf("positional Codex target unexpectedly installed alpha for Claude: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "bmo")); !os.IsNotExist(err) {
+		t.Fatalf("positional Codex target unexpectedly bootstrapped bmo for Claude: %v", err)
+	}
+}
+
+func TestAddAllForPortableHarnessValidatesBeforeWriting(t *testing.T) {
+	home := t.TempDir()
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+	missing := filepath.Join(src, "skills", "missing-name")
+	if err := os.MkdirAll(missing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(missing, "SKILL.md"), []byte("---\ndescription: Missing portable name.\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runBmo(t, home, "add", src, "--all", "--yes", "--harness", "codex")
+	if err == nil || !strings.Contains(err.Error(), "explicit name") {
+		t.Fatalf("expected portable validation error, got %v\n%s", err, out)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".agents", "skills", "alpha")); !os.IsNotExist(statErr) {
+		t.Fatalf("batch validation wrote alpha before failing: %v", statErr)
+	}
+}
+
+func TestAddEveryoneInstallsToDetectedHarnesses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	for _, dir := range []string{".codex", ".gemini", ".config/amp"} {
+		if err := os.MkdirAll(filepath.Join(home, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+
+	out, err := runBmo(t, home, "add", src, "everyone", "--yes")
+	if err != nil {
+		t.Fatalf("add everyone failed: %v\n%s", err, out)
+	}
+	for _, dir := range []string{".agents/skills", ".gemini/skills", ".config/agents/skills"} {
+		if _, err := os.Stat(filepath.Join(home, filepath.FromSlash(dir), "alpha", "SKILL.md")); err != nil {
+			t.Fatalf("expected everyone install in %s: %v\n%s", dir, err, out)
+		}
+	}
+	if !strings.Contains(out, "3 detected harness(es)") || !strings.Contains(out, "Installed 3 skill copies") {
+		t.Fatalf("unexpected everyone summary:\n%s", out)
+	}
+}
+
+func TestDetectedProjectTargetsDeduplicateSharedAgentsDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	for _, dir := range []string{".codex", ".config/amp"} {
+		if err := os.MkdirAll(filepath.Join(home, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targets, err := detectedTargets(bmo.ScopeProject, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || strings.Join(targets[0].harnesses, ",") != "codex,amp" {
+		t.Fatalf("shared project targets were not deduplicated: %+v", targets)
+	}
+}
+
 func TestAddAllRefusesDuplicateNames(t *testing.T) {
 	home := t.TempDir()
 	src := t.TempDir()

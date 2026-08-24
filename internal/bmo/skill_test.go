@@ -62,6 +62,19 @@ func TestValidateRejectsInvalidSkillName(t *testing.T) {
 	}
 }
 
+func TestValidateSkillNameUsesPortableAgentSkillsFormat(t *testing.T) {
+	for _, name := range []string{"-leading", "trailing-", "two--hyphens", "UPPER", "under_score"} {
+		if err := ValidateSkillName(name); err == nil {
+			t.Fatalf("ValidateSkillName(%q) = nil, want error", name)
+		}
+	}
+	for _, name := range []string{"a", "portable-skill", "skill-2"} {
+		if err := ValidateSkillName(name); err != nil {
+			t.Fatalf("ValidateSkillName(%q) unexpected error: %v", name, err)
+		}
+	}
+}
+
 func TestValidateWarnsOnExecutableLookingFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "scripted")

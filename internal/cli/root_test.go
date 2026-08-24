@@ -28,6 +28,7 @@ func TestShouldBootstrap(t *testing.T) {
 		{"add with extra args bootstraps", "add", []string{bmo.EmbeddedSkillName, "extra"}, true},
 		{"list bootstraps", "list", nil, true},
 		{"doctor bootstraps", "doctor", nil, true},
+		{"harness list is informational", "harnesses", nil, false},
 		{"help is skipped", "help", nil, false},
 		{"completion is skipped", "completion", nil, false},
 		{"__complete is skipped", "__complete", nil, false},
@@ -91,6 +92,33 @@ func TestSplitScopeKeyword(t *testing.T) {
 				if rest[i] != tc.wantRest[i] {
 					t.Fatalf("rest = %v, want %v", rest, tc.wantRest)
 				}
+			}
+		})
+	}
+}
+
+func TestSplitAddKeywords(t *testing.T) {
+	cases := []struct {
+		name, scope, harness string
+		args, rest           []string
+		wantErr              bool
+	}{
+		{"positional harness", "", "codex", []string{"owner/repo", "codex"}, []string{"owner/repo"}, false},
+		{"everyone and project", "here", "everyone", []string{"everyone", "owner/repo", "here"}, []string{"owner/repo"}, false},
+		{"source only", "", "", []string{"owner/repo"}, []string{"owner/repo"}, false},
+		{"two harnesses", "", "", []string{"owner/repo", "codex", "gemini"}, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rest, scope, harness, err := splitAddKeywords(tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil || scope != tc.scope || harness != tc.harness || strings.Join(rest, ",") != strings.Join(tc.rest, ",") {
+				t.Fatalf("splitAddKeywords(%v) = %v, %q, %q, %v", tc.args, rest, scope, harness, err)
 			}
 		})
 	}
@@ -162,7 +190,7 @@ func isolateHome(t *testing.T) string {
 	// Ensure the global skills dir falls back to HOME/.claude/skills.
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
-	skill := []byte("---\nname: bmo\ndescription: Use when the user wants to install Claude Code skills with the bmo CLI.\n---\n\n# bmo\n")
+	skill := []byte("---\nname: bmo\ndescription: Use when the user wants to install portable coding-agent skills with the bmo CLI.\n---\n\n# bmo\n")
 	bmo.SetEmbeddedFS(fstest.MapFS{
 		"SKILL.md": &fstest.MapFile{Data: skill},
 	})
@@ -195,6 +223,42 @@ func TestBootstrapBmoSkillInstallsAndMarks(t *testing.T) {
 
 	if stderr.Len() == 0 {
 		t.Fatalf("expected a bootstrap message on stderr")
+	}
+}
+
+func TestInitInstallsBundledSkillForCodex(t *testing.T) {
+	home := isolateHome(t)
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"init", "--harness", "codex"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	installed := filepath.Join(home, ".agents", "skills", bmo.EmbeddedSkillName, "SKILL.md")
+	if _, err := os.Stat(installed); err != nil {
+		t.Fatalf("expected Codex skill at %s: %v", installed, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bmo", ".bootstrapped-codex")); err != nil {
+		t.Fatalf("expected Codex-specific bootstrap marker: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", bmo.EmbeddedSkillName)); !os.IsNotExist(err) {
+		t.Fatalf("Codex init should not install into Claude: %v", err)
+	}
+}
+
+func TestHarnessesCommandListsCodexAndCustomEscapeHatch(t *testing.T) {
+	isolateHome(t)
+	cmd := NewRootCommand()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"harnesses"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "codex\t.agents/skills") || !strings.Contains(got, "bmo add SOURCE everyone") || !strings.Contains(got, "--skills-dir PATH") {
+		t.Fatalf("unexpected harness list:\n%s", got)
 	}
 }
 

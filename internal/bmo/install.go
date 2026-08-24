@@ -12,7 +12,10 @@ import (
 )
 
 type InstallOptions struct {
-	Scope  Scope
+	Scope Scope
+	// Target selects a coding harness destination. A zero Target preserves the
+	// original Claude Code behavior using Scope and CWD.
+	Target Target
 	Name   string
 	Force  bool
 	DryRun bool
@@ -22,6 +25,7 @@ type InstallOptions struct {
 }
 
 func InstallSkill(opts InstallOptions) (SkillMeta, error) {
+	var err error
 	if opts.CWD == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -29,16 +33,25 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 		}
 		opts.CWD = cwd
 	}
-	skillsDir, metadataPath, err := ScopePaths(opts.Scope, opts.CWD)
-	if err != nil {
-		return SkillMeta{}, err
+	target := opts.Target
+	if target.SkillsDir == "" {
+		target, err = ResolveTarget("", opts.Scope, opts.CWD, "")
+		if err != nil {
+			return SkillMeta{}, err
+		}
 	}
+	// Target is authoritative when supplied by a multi-harness caller.
+	opts.Scope = target.Scope
+	skillsDir, metadataPath := target.SkillsDir, target.MetadataPath
 	skill := opts.Skill
 	if opts.Name != "" || skill.Name == "" {
 		skill, err = ValidateSkill(opts.Skill.Path, opts.Name)
 		if err != nil {
 			return SkillMeta{}, err
 		}
+	}
+	if err := ValidateSkillForTarget(skill, target); err != nil {
+		return SkillMeta{}, err
 	}
 	dest := filepath.Join(skillsDir, skill.Name)
 	meta, err := ReadMetadata(metadataPath)
@@ -49,15 +62,12 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 	if got, ok := meta.Skills[skill.Name]; ok {
 		existing = &got
 	}
-	next := NewSkillMeta(skill, opts.Scope, opts.Source, dest, existing)
+	next := NewSkillMetaForTarget(skill, target, opts.Source, dest, existing)
 	_, destErr := os.Stat(dest)
 	if destErr == nil && !opts.Force {
 		return SkillMeta{}, fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
 	}
-	agentsDir, err := AgentsDir(opts.Scope, opts.CWD)
-	if err != nil {
-		return SkillMeta{}, err
-	}
+	agentsDir := target.AgentsDir
 	// Agent files this skill already owns are fair game to overwrite; anything
 	// else in the agents directory belongs to the user or another skill.
 	owned := map[string]bool{}
@@ -66,7 +76,7 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 			owned[file] = true
 		}
 	}
-	if !opts.Force {
+	if target.SupportsAgents() && !opts.Force {
 		if conflicts := agentConflicts(skill.Agents, agentsDir, owned); len(conflicts) > 0 {
 			return SkillMeta{}, fmt.Errorf(
 				"subagent already exists and is not owned by %s: %s; use --force to replace it",
@@ -96,7 +106,11 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 		restoreSkill()
 		return SkillMeta{}, err
 	}
-	rollbackAgents, commitAgents, err := installAgents(skill.Agents, skill.Path, agentsDir)
+	agents := skill.Agents
+	if !target.SupportsAgents() {
+		agents = nil
+	}
+	rollbackAgents, commitAgents, err := installAgents(agents, skill.Path, agentsDir)
 	if err != nil {
 		restoreSkill()
 		return SkillMeta{}, err
@@ -142,18 +156,20 @@ type Conflict struct {
 // that stops halfway through leaves the user with an incoherent set of skills,
 // so every conflict is surfaced up front.
 func CheckInstallConflicts(skill Skill, scope Scope, cwd string) (Conflict, error) {
-	skillsDir, metadataPath, err := ScopePaths(scope, cwd)
+	target, err := ResolveTarget("", scope, cwd, "")
 	if err != nil {
 		return Conflict{}, err
 	}
+	return CheckInstallConflictsForTarget(skill, target)
+}
+
+// CheckInstallConflictsForTarget is the harness-aware conflict check.
+func CheckInstallConflictsForTarget(skill Skill, target Target) (Conflict, error) {
+	skillsDir, metadataPath := target.SkillsDir, target.MetadataPath
 	conflict := Conflict{Skill: skill.Name}
 	dest := filepath.Join(skillsDir, skill.Name)
 	if _, err := os.Stat(dest); err == nil {
 		conflict.Path = dest
-	}
-	agentsDir, err := AgentsDir(scope, cwd)
-	if err != nil {
-		return Conflict{}, err
 	}
 	meta, err := ReadMetadata(metadataPath)
 	if err != nil {
@@ -165,7 +181,9 @@ func CheckInstallConflicts(skill Skill, scope Scope, cwd string) (Conflict, erro
 			owned[file] = true
 		}
 	}
-	conflict.Agents = agentConflicts(skill.Agents, agentsDir, owned)
+	if target.SupportsAgents() {
+		conflict.Agents = agentConflicts(skill.Agents, target.AgentsDir, owned)
+	}
 	return conflict, nil
 }
 
@@ -175,10 +193,16 @@ func (c Conflict) Empty() bool {
 }
 
 func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
-	skillsDir, metadataPath, err := ScopePaths(scope, cwd)
+	target, err := ResolveTarget("", scope, cwd, "")
 	if err != nil {
 		return SkillMeta{}, err
 	}
+	return RemoveSkillFromTarget(name, target)
+}
+
+// RemoveSkillFromTarget removes a skill from one resolved harness destination.
+func RemoveSkillFromTarget(name string, target Target) (SkillMeta, error) {
+	skillsDir, metadataPath := target.SkillsDir, target.MetadataPath
 	meta, err := ReadMetadata(metadataPath)
 	if err != nil {
 		return SkillMeta{}, err
@@ -194,11 +218,10 @@ func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
 		return SkillMeta{}, err
 	}
 	if len(entry.Agents) > 0 {
-		agentsDir, err := AgentsDir(scope, cwd)
-		if err != nil {
-			return SkillMeta{}, err
+		if !target.SupportsAgents() {
+			return SkillMeta{}, fmt.Errorf("metadata tracks subagents but harness %s has no compatible agent destination", target.Harness)
 		}
-		if err := removeAgents(entry.Agents, agentsDir); err != nil {
+		if err := removeAgents(entry.Agents, target.AgentsDir); err != nil {
 			return SkillMeta{}, err
 		}
 	}

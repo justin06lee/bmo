@@ -22,30 +22,49 @@ type DoctorCheck struct {
 }
 
 func RunDoctor(cwd string) []DoctorCheck {
+	checks, err := RunDoctorForHarness(cwd, string(HarnessClaude))
+	if err != nil {
+		return []DoctorCheck{{DoctorError, err.Error()}}
+	}
+	return checks
+}
+
+// RunDoctorForHarness checks both global and project destinations for a
+// built-in harness.
+func RunDoctorForHarness(cwd, harnessName string) ([]DoctorCheck, error) {
 	var checks []DoctorCheck
-	globalSkills, err := GlobalSkillsDir()
+	global, err := ResolveTarget(harnessName, ScopeGlobal, cwd, "")
 	if err != nil {
-		checks = append(checks, DoctorCheck{DoctorError, fmt.Sprintf("Global skills dir: %v", err)})
-	} else {
-		checks = append(checks, checkWritableDir("Global skills dir", globalSkills))
+		return nil, err
 	}
-	checks = append(checks, checkWritableDir("Project skills dir", ProjectSkillsDir(cwd)))
-	globalMeta, err := GlobalMetadataPath()
+	project, err := ResolveTarget(harnessName, ScopeProject, cwd, "")
 	if err != nil {
-		checks = append(checks, DoctorCheck{DoctorError, fmt.Sprintf("Metadata: %v", err)})
-	} else {
-		checks = append(checks, checkMetadata("Metadata", globalMeta))
-		checks = append(checks, checkMetadataEntries(globalMeta)...)
+		return nil, err
 	}
-	projectMeta := ProjectMetadataPath(cwd)
-	checks = append(checks, checkMetadata("Project metadata", projectMeta))
-	checks = append(checks, checkMetadataEntries(projectMeta)...)
-	checks = append(checks, checkDuplicates(cwd)...)
+	checks = append(checks, checkWritableDir("Global skills dir ("+string(global.Harness)+")", global.SkillsDir))
+	checks = append(checks, checkWritableDir("Project skills dir ("+string(project.Harness)+")", project.SkillsDir))
+	checks = append(checks, checkMetadata("Global metadata", global.MetadataPath))
+	checks = append(checks, checkMetadataEntries(global.MetadataPath)...)
+	checks = append(checks, checkMetadata("Project metadata", project.MetadataPath))
+	checks = append(checks, checkMetadataEntries(project.MetadataPath)...)
+	checks = append(checks, checkDuplicatesForTargets(global, project)...)
 	checks = append(checks, checkProjectRegistry()...)
-	checks = append(checks, checkAgents(cwd)...)
-	if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
+	checks = append(checks, checkAgentsForTargets(global, project)...)
+	if global.Harness == HarnessClaude && os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 		checks = append(checks, DoctorCheck{DoctorOK, "CLAUDE_CONFIG_DIR is set"})
 	}
+	return checks, nil
+}
+
+// RunDoctorForTarget checks one explicit destination, including custom skill
+// directories that do not have a built-in harness preset.
+func RunDoctorForTarget(target Target) []DoctorCheck {
+	checks := []DoctorCheck{
+		checkWritableDir("Skills dir ("+string(target.Harness)+")", target.SkillsDir),
+		checkMetadata("Metadata", target.MetadataPath),
+	}
+	checks = append(checks, checkMetadataEntries(target.MetadataPath)...)
+	checks = append(checks, checkAgentsForTargets(target)...)
 	return checks
 }
 
@@ -104,7 +123,6 @@ func checkMetadataEntries(path string) []DoctorCheck {
 // subagent file — a collision means one skill's specialist silently answers for
 // the other.
 func checkAgents(cwd string) []DoctorCheck {
-	var checks []DoctorCheck
 	globalMeta, err := GlobalMetadataPath()
 	if err != nil {
 		return nil
@@ -113,16 +131,19 @@ func checkAgents(cwd string) []DoctorCheck {
 	if err != nil {
 		return nil
 	}
-	scopes := []struct {
-		label     string
-		metaPath  string
-		agentsDir string
-	}{
-		{"global", globalMeta, globalAgents},
-		{"project", ProjectMetadataPath(cwd), ProjectAgentsDir(cwd)},
-	}
-	for _, scope := range scopes {
-		meta, err := ReadMetadata(scope.metaPath)
+	return checkAgentsForTargets(
+		Target{Harness: HarnessClaude, Scope: ScopeGlobal, MetadataPath: globalMeta, AgentsDir: globalAgents},
+		Target{Harness: HarnessClaude, Scope: ScopeProject, MetadataPath: ProjectMetadataPath(cwd), AgentsDir: ProjectAgentsDir(cwd)},
+	)
+}
+
+func checkAgentsForTargets(targets ...Target) []DoctorCheck {
+	var checks []DoctorCheck
+	for _, target := range targets {
+		if !target.SupportsAgents() {
+			continue
+		}
+		meta, err := ReadMetadata(target.MetadataPath)
 		if err != nil {
 			continue
 		}
@@ -131,9 +152,9 @@ func checkAgents(cwd string) []DoctorCheck {
 		for name, entry := range meta.Skills {
 			for _, file := range entry.Agents {
 				owners[file] = append(owners[file], name)
-				if _, err := os.Stat(filepath.Join(scope.agentsDir, file)); err != nil {
+				if _, err := os.Stat(filepath.Join(target.AgentsDir, file)); err != nil {
 					checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf(
-						"Skill %s is missing its installed subagent (%s scope): %s", name, scope.label, file)})
+						"Skill %s is missing its installed subagent (%s scope): %s", name, target.Scope, file)})
 					continue
 				}
 				installed++
@@ -143,12 +164,12 @@ func checkAgents(cwd string) []DoctorCheck {
 			if len(names) > 1 {
 				sort.Strings(names)
 				checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf(
-					"Subagent %s is claimed by more than one %s skill: %s", file, scope.label, strings.Join(names, ", "))})
+					"Subagent %s is claimed by more than one %s skill: %s", file, target.Scope, strings.Join(names, ", "))})
 			}
 		}
 		if installed > 0 {
 			checks = append(checks, DoctorCheck{DoctorOK, fmt.Sprintf(
-				"%d installed subagents are present (%s scope): %s", installed, scope.label, scope.agentsDir)})
+				"%d installed subagents are present (%s scope): %s", installed, target.Scope, target.AgentsDir)})
 		}
 	}
 	return checks
@@ -161,6 +182,16 @@ func checkDuplicates(cwd string) []DoctorCheck {
 	}
 	globalMeta, _ := ReadMetadata(globalMetaPath)
 	projectMeta, _ := ReadMetadata(ProjectMetadataPath(cwd))
+	return checkDuplicateMetadata(globalMeta, projectMeta)
+}
+
+func checkDuplicatesForTargets(global, project Target) []DoctorCheck {
+	globalMeta, _ := ReadMetadata(global.MetadataPath)
+	projectMeta, _ := ReadMetadata(project.MetadataPath)
+	return checkDuplicateMetadata(globalMeta, projectMeta)
+}
+
+func checkDuplicateMetadata(globalMeta, projectMeta Metadata) []DoctorCheck {
 	var checks []DoctorCheck
 	for name := range projectMeta.Skills {
 		if _, ok := globalMeta.Skills[name]; ok {

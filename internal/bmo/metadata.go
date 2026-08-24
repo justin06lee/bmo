@@ -13,15 +13,16 @@ type Metadata struct {
 }
 
 type SkillMeta struct {
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	Scope         Scope  `json:"scope"`
-	Source        string `json:"source"`
-	InstalledPath string `json:"installed_path"`
-	InstalledAt   string `json:"installed_at"`
-	UpdatedAt     string `json:"updated_at"`
-	SourceRef     string `json:"source_ref,omitempty"`
-	SourceType    string `json:"source_type"`
+	Name          string  `json:"name"`
+	Description   string  `json:"description"`
+	Scope         Scope   `json:"scope"`
+	Harness       Harness `json:"harness,omitempty"`
+	Source        string  `json:"source"`
+	InstalledPath string  `json:"installed_path"`
+	InstalledAt   string  `json:"installed_at"`
+	UpdatedAt     string  `json:"updated_at"`
+	SourceRef     string  `json:"source_ref,omitempty"`
+	SourceType    string  `json:"source_type"`
 	// Agents lists the subagent filenames this skill installed into the
 	// scope's agents directory. Tracking them by name is what makes removal
 	// exact: bmo deletes only the files it wrote.
@@ -95,16 +96,27 @@ func WriteMetadata(path string, meta Metadata) error {
 }
 
 func NewSkillMeta(skill Skill, scope Scope, source Source, installedPath string, existing *SkillMeta) SkillMeta {
+	return NewSkillMetaForTarget(skill, Target{Harness: HarnessClaude, Scope: scope}, source, installedPath, existing)
+}
+
+// NewSkillMetaForTarget records the harness alongside the original metadata.
+// The omitempty field keeps old Claude metadata readable and diff-friendly.
+func NewSkillMetaForTarget(skill Skill, target Target, source Source, installedPath string, existing *SkillMeta) SkillMeta {
 	now := time.Now().UTC().Format(time.RFC3339)
 	installedAt := now
 	if existing != nil && existing.InstalledAt != "" {
 		installedAt = existing.InstalledAt
 	}
+	var agents []string
+	if target.SupportsAgents() || target.Harness == "" || target.Harness == HarnessClaude {
+		agents = AgentFiles(skill.Agents)
+	}
 	return SkillMeta{
 		Name:          skill.Name,
 		Description:   skill.Description,
-		Agents:        AgentFiles(skill.Agents),
-		Scope:         scope,
+		Agents:        agents,
+		Scope:         target.Scope,
+		Harness:       target.Harness,
 		Source:        source.Raw,
 		InstalledPath: installedPath,
 		InstalledAt:   installedAt,

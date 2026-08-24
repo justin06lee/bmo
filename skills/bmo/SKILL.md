@@ -1,18 +1,18 @@
 ---
 name: bmo
-description: Use when managing Claude Code skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade) or when creating/formatting a skill so bmo can install it. Triggers on "install a skill", "add/update/remove a skill", "bmo <anything>", pointing at a GitHub repo, folder, or zip containing a SKILL.md, and on "make a skill", "write a SKILL.md", "package this as a skill", "make this bmo-compatible".
+description: Use when managing portable coding-agent skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade, or target Codex/Claude/Cursor/Gemini/Copilot/Windsurf/OpenCode/Amp/Cline) or when creating a bmo-compatible SKILL.md package.
 ---
 
 # bmo
 
-`bmo` is a tiny command-line installer for Claude Code skills. A skill is a
+`bmo` is a tiny command-line installer for portable Agent Skills. A skill is a
 folder containing a `SKILL.md` file. `bmo` resolves a source (GitHub repo,
-local folder, or zip URL), validates the skill, copies it into Claude Code's
+local folder, or zip URL), validates the skill, copies it into the selected coding harness's
 skills directory, and tracks it so it can be listed, updated, or removed.
 
-A skill may also bundle **subagents** in an `agents/` folder. Those are
-installed into Claude Code's agents directory and tracked with the skill, so
-`bmo remove` takes them away again. See "Shipping subagents with a skill".
+A skill may also bundle **Claude Code subagents** in an `agents/` folder. The
+`claude` preset exports and tracks those files. Other harnesses retain the
+folder as a skill resource because their live agent schemas differ.
 
 It **only copies files** — it never executes downloaded code, runs install
 hooks, or installs dependencies.
@@ -29,6 +29,9 @@ user to run `go install github.com/justin06lee/bmo@latest`.
 
 ```bash
 bmo add SOURCE        # install a skill (and any subagents it bundles)
+bmo add SOURCE codex  # install into Codex's portable .agents/skills location
+bmo add SOURCE gemini # install into Gemini CLI's native location
+bmo add SOURCE everyone # install into every detected harness on the machine
 bmo add SOURCE --all  # install every skill the source contains
 bmo inspect SOURCE    # preview a skill without installing
 bmo list              # list installed skills (both scopes)
@@ -37,12 +40,40 @@ bmo update NAME       # same check for one skill
 bmo remove NAME       # uninstall a skill
 bmo doctor            # run diagnostics
 bmo init              # (re)install this bundled bmo skill
+bmo harnesses         # list supported harness presets and paths
 bmo upgrade           # upgrade the bmo binary itself to the latest release
 bmo --version         # show the installed bmo version
 ```
 
 Always run `bmo inspect SOURCE` before `bmo add` for third-party sources so
 the user can see the file list and any executable-file warnings first.
+
+### Coding harnesses
+
+Claude is the backward-compatible default. For `add`, place a harness name
+directly after the source: `bmo add owner/repo codex`. The `--harness NAME`
+form remains available for compatibility and is used by `init`, `list`,
+`remove`, `update`, and `doctor`:
+
+| Name | Project | Global |
+|------|---------|--------|
+| `claude` | `.claude/skills` | `~/.claude/skills` or `$CLAUDE_CONFIG_DIR/skills` |
+| `codex` | `.agents/skills` | `~/.agents/skills` |
+| `cursor` | `.cursor/skills` | `~/.cursor/skills` |
+| `gemini` | `.gemini/skills` | `~/.gemini/skills` |
+| `copilot` | `.github/skills` | `~/.copilot/skills` |
+| `windsurf` | `.windsurf/skills` | `~/.codeium/windsurf/skills` |
+| `opencode` | `.opencode/skills` | `~/.config/opencode/skills` |
+| `amp` | `.agents/skills` | `~/.config/agents/skills` |
+| `cline` | `.cline/skills` | `~/.cline/skills` |
+
+The Codex `.agents/skills` location is also a cross-harness convention read by
+many of the other presets. For any unlisted harness use `--skills-dir PATH`;
+do not combine it with `--harness`.
+
+Use `bmo add SOURCE everyone` to install into every harness whose executable is
+on `PATH` or whose user config directory already exists. bmo preflights every
+destination and writes shared directories only once.
 
 ### Source formats
 
@@ -63,11 +94,8 @@ A bare `owner/repo` is treated as GitHub. When no ref is given, bmo tries the
 `add`, `init`, `list`, `remove`, and `update` accept an optional location
 keyword as a plain positional word, before or after the other argument:
 
-- **`here`** — the current project (`./.claude/skills`, subagents in
-  `./.claude/agents`, metadata in `.claude/bmo-lock.json`)
-- **`everywhere`** — global, the default (`$CLAUDE_CONFIG_DIR/skills/` or
-  `~/.claude/skills/`, subagents in the sibling `agents/` directory, metadata in
-  `~/.bmo/skills.json`)
+- **`here`** — the selected harness's project skills directory
+- **`everywhere`** — the selected harness's global directory (the default)
 
 ```bash
 bmo add owner/repo here       # install into this project
@@ -110,18 +138,23 @@ subpath, or install the odd one out separately with `--name`.
 ### Useful flags
 
 - `--all` — install every skill in the source (not combinable with `--name`)
-- `--name NAME` — override the installed folder name (must match `^[a-z0-9-]+$`)
+- `--name NAME` — override the installed folder name for legacy Claude installs;
+  portable harnesses require it to match the declared frontmatter name
 - `--force` — replace an existing install of the same name (on `add`)
 - `--yes` — skip confirmation prompts; use for non-interactive runs
 - `--dry-run` — show what would happen without writing anything
 - `--json` — machine-readable output (on `list`)
+- positional `HARNESS` on `add` — use a built-in coding-harness preset
+- positional `everyone` on `add` — install to every detected harness
+- `--harness NAME` — compatibility alias and target selector on other commands
+- `--skills-dir PATH` — use an exact skills directory for any other harness
 
 ### Troubleshooting
 
 If a skill folder is missing, metadata looks corrupt, or names collide across
 scopes, run `bmo doctor` — it pinpoints the issue without changing anything.
-The first bmo run auto-installs this skill globally once (sentinel:
-`~/.bmo/.bootstrapped`); `bmo remove bmo` sticks after that.
+The first bmo run auto-installs this skill globally once per selected harness;
+`bmo remove bmo --harness NAME` sticks after that.
 
 ---
 
@@ -136,7 +169,7 @@ my-skill/                 <- folder name: lowercase letters, digits, hyphens onl
 ├── .bmoignore            <- optional; paths to keep out of the install
 ├── references/           <- optional supporting files, copied verbatim
 ├── scripts/              <- optional; executable files are allowed but flagged
-└── agents/               <- optional subagent definitions, installed separately
+└── agents/               <- optional Claude subagents; otherwise normal resources
 ```
 
 `SKILL.md` must **begin** with YAML frontmatter fenced by `---` lines — no
@@ -150,16 +183,18 @@ description: Use when <trigger conditions>. Triggers on phrases like <examples>.
 
 # my-skill
 
-Instructions for Claude go here.
+Instructions for the coding agent go here.
 ```
 
 ### Frontmatter rules
 
 - `description` is **required** and non-empty. Keep it under 1024 characters.
-  Write it as trigger guidance: when should Claude reach for this skill?
-- `name` is optional but recommended. If present it must match `^[a-z0-9-]+$`
+  Write it as trigger guidance: when should an agent reach for this skill?
+- `name` is required for every portable/non-Claude target and must match the
+  installed folder. It is optional only for backward-compatible Claude installs.
+  When present it must use lowercase letters and digits separated by single hyphens
   and be at most 64 characters. It becomes the installed folder name and the
-  `/slash-command` in Claude Code.
+  invocation name in harnesses that support explicit skill invocation.
 - If `name` is omitted, the folder name is used instead: lowercased, with
   every run of other characters collapsed to a single `-`. Prefer setting
   `name` explicitly.
@@ -172,7 +207,8 @@ subagent is a separate worker with its own context window, model, and tool
 allowlist, spawned by name and able to run in parallel with others.
 
 Claude Code discovers subagents from its **agents** directory, which sits beside
-the skills directory, so bmo installs them to a second destination:
+the skills directory, so bmo installs them to a second destination only when
+`--harness claude` is selected:
 
 | Scope | Skill goes to | Subagents go to |
 |-------|---------------|-----------------|
@@ -197,7 +233,7 @@ Rules for `agents/`:
   never resolve.
 - Each file needs frontmatter with a non-empty `description`, exactly like a
   skill. `name` is optional; the filename stem is used when it's absent, and it
-  must match `^[a-z0-9-]+$`.
+  must use lowercase letters and digits separated by single hyphens.
 - The file is installed under the name you shipped it as, and recorded in bmo's
   metadata. `bmo remove` deletes exactly those files and nothing else, so
   hand-written subagents in the same directory are never touched.
@@ -262,7 +298,8 @@ subagents get installed, which folders count as skills, and the content hash
 - `SKILL.md` must exist at the skill folder's root and start with frontmatter.
 - The frontmatter must be valid YAML and closed with a `---` line.
 - `description` must be non-empty.
-- The resolved name must match `^[a-z0-9-]+$` (≤ 64 chars).
+- The resolved name must use lowercase letters and digits separated by single
+  hyphens (≤ 64 chars; no leading, trailing, or repeated hyphens).
 - **No symlinks anywhere in the tree** — the copy refuses them outright.
 - Every `agents/*.md` file must parse, carry a non-empty `description`, and
   resolve to a valid name. A malformed subagent fails the whole install rather

@@ -17,27 +17,29 @@ import (
 )
 
 type options struct {
-	project bool
-	global  bool
-	name    string
-	force   bool
-	yes     bool
-	dryRun  bool
-	json    bool
-	all     bool
+	project   bool
+	global    bool
+	harness   string
+	skillsDir string
+	name      string
+	force     bool
+	yes       bool
+	dryRun    bool
+	json      bool
+	all       bool
 }
 
 func NewRootCommand() *cobra.Command {
 	opts := &options{}
 	root := &cobra.Command{
 		Use:           "bmo",
-		Short:         "A tiny installer for Claude Code skills",
+		Short:         "A tiny installer for coding-agent skills",
 		Version:       buildVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true, // main prints the returned error once
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			if shouldBootstrap(cmd, args) {
-				bootstrapBmoSkill(cmd)
+				bootstrapBmoSkillForOptions(cmd, args, opts)
 			}
 		},
 	}
@@ -47,24 +49,38 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newListCommand(opts))
 	root.AddCommand(newRemoveCommand(opts))
 	root.AddCommand(newUpdateCommand(opts))
-	root.AddCommand(newDoctorCommand())
+	root.AddCommand(newDoctorCommand(opts))
+	root.AddCommand(newHarnessesCommand())
 	root.AddCommand(newUpgradeCommand())
 	return root
 }
 
 func newAddCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add SOURCE [here|everywhere]",
-		Short: "Install a Claude Code skill",
-		Args:  argsWithKeyword(cobra.ExactArgs(1)),
+		Use:   "add SOURCE [here|everywhere] [HARNESS|everyone]",
+		Short: "Install a coding-agent skill",
+		Args: func(cmd *cobra.Command, args []string) error {
+			rest, _, _, err := splitAddKeywords(args)
+			if err != nil {
+				return err
+			}
+			return cobra.ExactArgs(1)(cmd, rest)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			args, keyword, err := splitScopeKeyword(args)
+			args, keyword, positionalHarness, err := splitAddKeywords(args)
 			if err != nil {
 				return err
+			}
+			effective := *opts
+			if positionalHarness != "" {
+				if opts.harness != "" || opts.skillsDir != "" {
+					return errors.New("a positional harness cannot be combined with --harness or --skills-dir")
+				}
+				effective.harness = positionalHarness
 			}
 			scope := keywordScope(keyword, opts)
 			src, err := bmo.ParseSource(args[0])
@@ -76,33 +92,35 @@ func newAddCommand(opts *options) *cobra.Command {
 				return err
 			}
 			defer cleanupResolved(resolved)
-			if opts.all {
-				return addAll(cmd, resolved, src, scope, cwd, opts)
+			if positionalHarness == "everyone" {
+				return addEveryone(cmd, resolved, scope, cwd, &effective)
 			}
-			skill, err := selectSkill(resolved.Root, opts.name)
+			target, err := targetFor(scope, cwd, &effective)
 			if err != nil {
 				return err
 			}
-			if opts.name != "" {
-				skill, err = bmo.ValidateSkill(skill.Path, opts.name)
+			if effective.all {
+				return addAll(cmd, resolved, src, scope, cwd, &effective)
+			}
+			skill, err := selectSkill(resolved.Root, effective.name)
+			if err != nil {
+				return err
+			}
+			if effective.name != "" {
+				skill, err = bmo.ValidateSkill(skill.Path, effective.name)
 				if err != nil {
 					return err
 				}
 			}
-			skillsDir, _, err := bmo.ScopePaths(scope, cwd)
-			if err != nil {
+			if err := bmo.ValidateSkillForTarget(skill, target); err != nil {
 				return err
 			}
-			dest := filepath.Join(skillsDir, skill.Name)
-			if _, err := os.Stat(dest); err == nil && !opts.force && !opts.dryRun {
+			dest := filepath.Join(target.SkillsDir, skill.Name)
+			if _, err := os.Stat(dest); err == nil && !effective.force && !effective.dryRun {
 				return fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
 			}
-			agentsDir, err := bmo.AgentsDir(scope, cwd)
-			if err != nil {
-				return err
-			}
-			printSkillPreview(cmd, skill, src.Raw, scope, dest, agentsDir)
-			if !opts.yes && !opts.dryRun {
+			printSkillPreview(cmd, skill, src.Raw, target, dest)
+			if !effective.yes && !effective.dryRun {
 				ok, err := confirm(cmd, "Install? [y/N] ")
 				if err != nil {
 					return err
@@ -113,9 +131,10 @@ func newAddCommand(opts *options) *cobra.Command {
 			}
 			meta, err := bmo.InstallSkill(bmo.InstallOptions{
 				Scope:  scope,
-				Name:   opts.name,
-				Force:  opts.force,
-				DryRun: opts.dryRun,
+				Target: target,
+				Name:   effective.name,
+				Force:  effective.force,
+				DryRun: effective.dryRun,
 				CWD:    cwd,
 				Source: resolved.Source,
 				Skill:  skill,
@@ -123,25 +142,26 @@ func newAddCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if opts.dryRun {
+			if effective.dryRun {
 				fmt.Fprintf(cmd.OutOrStdout(), "Dry run: would install %s to %s\n", meta.Name, meta.InstalledPath)
 				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n", meta.Name, meta.InstalledPath)
 			if len(meta.Agents) > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "Installed %d subagents to %s: %s\n",
-					len(meta.Agents), agentsDir, strings.Join(bmo.AgentNames(skill.Agents), ", "))
+					len(meta.Agents), target.AgentsDir, strings.Join(bmo.AgentNames(skill.Agents), ", "))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "\nUse it in Claude Code:\n  /%s\n", meta.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "\nUse it in %s:\n  %s\n", target.Harness, target.InvocationHint(meta.Name))
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into ./.claude/skills")
+	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into the harness's project skills directory")
 	cmd.Flags().StringVar(&opts.name, "name", "", "Override destination skill folder name")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "Replace an existing installed skill")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would happen without copying files")
 	cmd.Flags().BoolVar(&opts.all, "all", false, "Install every skill the source contains")
+	addHarnessFlags(cmd, opts)
 	return cmd
 }
 
@@ -191,18 +211,24 @@ func addAll(cmd *cobra.Command, resolved bmo.ResolvedSource, src bmo.Source, sco
 			len(duplicates), strings.Join(duplicates, "\n  "))
 	}
 
-	skillsDir, _, err := bmo.ScopePaths(scope, cwd)
+	target, err := targetFor(scope, cwd, opts)
 	if err != nil {
 		return err
 	}
-	agentsDir, err := bmo.AgentsDir(scope, cwd)
-	if err != nil {
-		return err
+	skillsDir, agentsDir := target.SkillsDir, target.AgentsDir
+	var incompatible []string
+	for _, skill := range skills {
+		if err := bmo.ValidateSkillForTarget(skill, target); err != nil {
+			incompatible = append(incompatible, fmt.Sprintf("%s: %v", skill.Name, err))
+		}
+	}
+	if len(incompatible) > 0 {
+		return fmt.Errorf("cannot install every skill for %s:\n  %s", target.Harness, strings.Join(incompatible, "\n  "))
 	}
 	var conflicts []string
 	agentOwners := map[string]string{}
 	for _, skill := range skills {
-		conflict, err := bmo.CheckInstallConflicts(skill, scope, cwd)
+		conflict, err := bmo.CheckInstallConflictsForTarget(skill, target)
 		if err != nil {
 			return err
 		}
@@ -216,12 +242,14 @@ func addAll(cmd *cobra.Command, resolved bmo.ResolvedSource, src bmo.Source, sco
 		}
 		// Two skills in one source claiming one subagent file is an authoring
 		// bug: whichever installs last would silently win.
-		for _, agent := range skill.Agents {
-			if owner, ok := agentOwners[agent.File]; ok {
-				conflicts = append(conflicts, fmt.Sprintf("subagent %s is shipped by both %s and %s", agent.File, owner, skill.Name))
-				continue
+		if target.SupportsAgents() {
+			for _, agent := range skill.Agents {
+				if owner, ok := agentOwners[agent.File]; ok {
+					conflicts = append(conflicts, fmt.Sprintf("subagent %s is shipped by both %s and %s", agent.File, owner, skill.Name))
+					continue
+				}
+				agentOwners[agent.File] = skill.Name
 			}
-			agentOwners[agent.File] = skill.Name
 		}
 	}
 	if len(conflicts) > 0 {
@@ -230,7 +258,7 @@ func addAll(cmd *cobra.Command, resolved bmo.ResolvedSource, src bmo.Source, sco
 			strings.Join(conflicts, "\n  "))
 	}
 
-	printBatchPreview(cmd, skills, src.Raw, scope, skillsDir, agentsDir)
+	printBatchPreview(cmd, skills, src.Raw, target, skillsDir, agentsDir)
 	if !opts.yes && !opts.dryRun {
 		ok, err := confirm(cmd, fmt.Sprintf("Install all %d? [y/N] ", len(skills)))
 		if err != nil {
@@ -244,6 +272,7 @@ func addAll(cmd *cobra.Command, resolved bmo.ResolvedSource, src bmo.Source, sco
 	for _, skill := range skills {
 		meta, err := bmo.InstallSkill(bmo.InstallOptions{
 			Scope:  scope,
+			Target: target,
 			Force:  opts.force,
 			DryRun: opts.dryRun,
 			CWD:    cwd,
@@ -267,9 +296,163 @@ func addAll(cmd *cobra.Command, resolved bmo.ResolvedSource, src bmo.Source, sco
 	return nil
 }
 
-func printBatchPreview(cmd *cobra.Command, skills []bmo.Skill, source string, scope bmo.Scope, skillsDir, agentsDir string) {
+type detectedTarget struct {
+	target    bmo.Target
+	harnesses []string
+}
+
+// addEveryone installs into every harness detected from PATH or an existing
+// user config directory. Shared destinations are written once.
+func addEveryone(cmd *cobra.Command, resolved bmo.ResolvedSource, scope bmo.Scope, cwd string, opts *options) error {
+	if opts.all && opts.name != "" {
+		return errors.New("--name renames a single skill; it cannot be combined with --all")
+	}
+	destinations, err := detectedTargets(scope, cwd)
+	if err != nil {
+		return err
+	}
+
+	var skills []bmo.Skill
+	if opts.all {
+		skills, err = bmo.DiscoverSkills(resolved.Root)
+		if err != nil {
+			return err
+		}
+		if len(skills) == 0 {
+			return errors.New("no skills found")
+		}
+		byName := map[string]string{}
+		for _, skill := range skills {
+			if skill.Name == "" {
+				return fmt.Errorf("cannot install every skill: %s failed validation: %s", skill.Path, strings.Join(skill.Warnings, "; "))
+			}
+			if previous, exists := byName[skill.Name]; exists {
+				return fmt.Errorf("cannot install every skill: duplicate name %s in %s and %s", skill.Name, previous, skill.Path)
+			}
+			byName[skill.Name] = skill.Path
+		}
+	} else {
+		skill, selectErr := selectSkill(resolved.Root, opts.name)
+		if selectErr != nil {
+			return selectErr
+		}
+		if opts.name != "" {
+			skill, selectErr = bmo.ValidateSkill(skill.Path, opts.name)
+			if selectErr != nil {
+				return selectErr
+			}
+		}
+		skills = []bmo.Skill{skill}
+	}
+
+	var problems []string
+	for _, destination := range destinations {
+		label := strings.Join(destination.harnesses, "+")
+		agentOwners := map[string]string{}
+		for _, skill := range skills {
+			if err := bmo.ValidateSkillForTarget(skill, destination.target); err != nil {
+				problems = append(problems, fmt.Sprintf("%s/%s: %v", label, skill.Name, err))
+				continue
+			}
+			conflict, err := bmo.CheckInstallConflictsForTarget(skill, destination.target)
+			if err != nil {
+				return err
+			}
+			if !opts.force && conflict.Path != "" {
+				problems = append(problems, fmt.Sprintf("%s/%s already exists at %s", label, skill.Name, conflict.Path))
+			}
+			if !opts.force {
+				for _, agent := range conflict.Agents {
+					problems = append(problems, fmt.Sprintf("%s/%s does not own subagent %s", label, skill.Name, agent))
+				}
+			}
+			if destination.target.SupportsAgents() {
+				for _, agent := range skill.Agents {
+					if owner, exists := agentOwners[agent.File]; exists {
+						problems = append(problems, fmt.Sprintf("%s subagent %s is shipped by both %s and %s", label, agent.File, owner, skill.Name))
+					}
+					agentOwners[agent.File] = skill.Name
+				}
+			}
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		return fmt.Errorf("cannot install for everyone:\n  %s", strings.Join(problems, "\n  "))
+	}
+
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "Found %d skills\n\nSource: %s\nScope: %s\nDestination: %s\n", len(skills), source, scope, skillsDir)
+	fmt.Fprintf(out, "Found %d skill(s) for %d detected harness(es) across %d destination(s)\n\n", len(skills), detectedHarnessCount(destinations), len(destinations))
+	for _, destination := range destinations {
+		fmt.Fprintf(out, "  %-24s %s\n", strings.Join(destination.harnesses, ", "), destination.target.SkillsDir)
+	}
+	fmt.Fprintln(out)
+	if !opts.yes && !opts.dryRun {
+		ok, err := confirm(cmd, "Install for everyone? [y/N] ")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("install cancelled")
+		}
+	}
+
+	installed := 0
+	for _, destination := range destinations {
+		for _, skill := range skills {
+			_, err := bmo.InstallSkill(bmo.InstallOptions{
+				Scope: scope, Target: destination.target, Name: opts.name,
+				Force: opts.force, DryRun: opts.dryRun, CWD: cwd,
+				Source: resolved.Source, Skill: skill,
+			})
+			if err != nil {
+				return fmt.Errorf("installed %d copies, then failed for %s: %w", installed, strings.Join(destination.harnesses, "+"), err)
+			}
+			installed++
+		}
+	}
+	if opts.dryRun {
+		fmt.Fprintf(out, "Dry run: would install %d skill copies.\n", installed)
+	} else {
+		fmt.Fprintf(out, "Installed %d skill copies for everyone.\n", installed)
+	}
+	return nil
+}
+
+func detectedTargets(scope bmo.Scope, cwd string) ([]detectedTarget, error) {
+	infos := bmo.DetectedHarnesses()
+	if len(infos) == 0 {
+		return nil, errors.New("no coding harnesses detected (install one, create its config directory, or name a harness explicitly)")
+	}
+	var targets []detectedTarget
+	byDir := map[string]int{}
+	for _, info := range infos {
+		target, err := bmo.ResolveTarget(string(info.Name), scope, cwd, "")
+		if err != nil {
+			return nil, err
+		}
+		key := filepath.Clean(target.SkillsDir)
+		if index, exists := byDir[key]; exists {
+			targets[index].harnesses = append(targets[index].harnesses, string(info.Name))
+			continue
+		}
+		byDir[key] = len(targets)
+		targets = append(targets, detectedTarget{target: target, harnesses: []string{string(info.Name)}})
+	}
+	return targets, nil
+}
+
+func detectedHarnessCount(targets []detectedTarget) int {
+	count := 0
+	for _, target := range targets {
+		count += len(target.harnesses)
+	}
+	return count
+}
+
+func printBatchPreview(cmd *cobra.Command, skills []bmo.Skill, source string, target bmo.Target, skillsDir, agentsDir string) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Found %d skills\n\nSource: %s\nHarness: %s\nScope: %s\nDestination: %s\n", len(skills), source, target.Harness, target.Scope, skillsDir)
 	totalAgents, withExecutables := 0, 0
 	for _, skill := range skills {
 		totalAgents += len(skill.Agents)
@@ -277,8 +460,10 @@ func printBatchPreview(cmd *cobra.Command, skills []bmo.Skill, source string, sc
 			withExecutables++
 		}
 	}
-	if totalAgents > 0 {
+	if totalAgents > 0 && target.SupportsAgents() {
 		fmt.Fprintf(out, "Subagent destination: %s\n", agentsDir)
+	} else if totalAgents > 0 {
+		fmt.Fprintln(out, "Bundled agents remain skill resources (their format is harness-specific).")
 	}
 	fmt.Fprintln(out)
 	for _, skill := range skills {
@@ -298,7 +483,7 @@ func printBatchPreview(cmd *cobra.Command, skills []bmo.Skill, source string, sc
 func newInitCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init [here|everywhere]",
-		Short: "Install the bundled bmo skill into Claude Code",
+		Short: "Install the bundled bmo skill into a coding harness",
 		Args:  argsWithKeyword(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
@@ -310,16 +495,21 @@ func newInitCommand(opts *options) *cobra.Command {
 				return err
 			}
 			scope := keywordScope(keyword, opts)
-			meta, err := installBmoSkill(scope, cwd, true)
+			target, err := targetFor(scope, cwd, opts)
 			if err != nil {
 				return err
 			}
-			markBootstrapped()
-			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in Claude Code:\n  /%s\n", meta.Name, meta.InstalledPath, meta.Name)
+			meta, err := installBmoSkillToTarget(target, cwd, true)
+			if err != nil {
+				return err
+			}
+			markBootstrappedFor(target.Harness)
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in %s:\n  %s\n", meta.Name, meta.InstalledPath, target.Harness, target.InvocationHint(meta.Name))
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into ./.claude/skills")
+	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into the harness's project skills directory")
+	addHarnessFlags(cmd, opts)
 	return cmd
 }
 
@@ -403,6 +593,7 @@ func newListCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Show only project installs")
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Show only global installs")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output JSON")
+	addHarnessFlags(cmd, opts)
 	return cmd
 }
 
@@ -421,11 +612,11 @@ func newRemoveCommand(opts *options) *cobra.Command {
 				return err
 			}
 			scope := keywordScope(keyword, opts)
-			_, metadataPath, err := bmo.ScopePaths(scope, cwd)
+			target, err := targetFor(scope, cwd, opts)
 			if err != nil {
 				return err
 			}
-			meta, err := bmo.ReadMetadata(metadataPath)
+			meta, err := bmo.ReadMetadata(target.MetadataPath)
 			if err != nil {
 				return err
 			}
@@ -435,12 +626,8 @@ func newRemoveCommand(opts *options) *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Remove %s from %s\n", entry.Name, entry.InstalledPath)
 			if len(entry.Agents) > 0 {
-				agentsDir, err := bmo.AgentsDir(scope, cwd)
-				if err != nil {
-					return err
-				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Also removes %d subagents from %s: %s\n",
-					len(entry.Agents), agentsDir, strings.Join(entry.Agents, ", "))
+					len(entry.Agents), target.AgentsDir, strings.Join(entry.Agents, ", "))
 			}
 			if !opts.yes {
 				ok, err := confirm(cmd, "Remove? [y/N] ")
@@ -451,7 +638,7 @@ func newRemoveCommand(opts *options) *cobra.Command {
 					return errors.New("remove cancelled")
 				}
 			}
-			removed, err := bmo.RemoveSkill(args[0], scope, cwd)
+			removed, err := bmo.RemoveSkillFromTarget(args[0], target)
 			if err != nil {
 				return err
 			}
@@ -462,6 +649,7 @@ func newRemoveCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Use project metadata")
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Use global metadata")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
+	addHarnessFlags(cmd, opts)
 	return cmd
 }
 
@@ -517,13 +705,14 @@ func newUpdateCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Use global metadata")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would happen without copying files")
+	addHarnessFlags(cmd, opts)
 	return cmd
 }
 
-func newDoctorCommand() *cobra.Command {
-	return &cobra.Command{
+func newDoctorCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Check local bmo and Claude Code skill setup",
+		Short: "Check local bmo and coding-harness skill setup",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -531,12 +720,56 @@ func newDoctorCommand() *cobra.Command {
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "bmo doctor")
 			fmt.Fprintln(cmd.OutOrStdout())
-			for _, check := range bmo.RunDoctor(cwd) {
+			var checks []bmo.DoctorCheck
+			if opts.skillsDir != "" {
+				target, err := targetFor(selectedScope(opts), cwd, opts)
+				if err != nil {
+					return err
+				}
+				checks = bmo.RunDoctorForTarget(target)
+			} else {
+				var err error
+				checks, err = bmo.RunDoctorForHarness(cwd, opts.harness)
+				if err != nil {
+					return err
+				}
+			}
+			for _, check := range checks {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-7s %s\n", check.Status, check.Message)
 			}
 			return nil
 		},
 	}
+	addHarnessFlags(cmd, opts)
+	cmd.Flags().BoolVar(&opts.project, "project", false, "Treat a custom skills directory as project-scoped")
+	cmd.Flags().BoolVar(&opts.global, "global", false, "Treat a custom skills directory as global")
+	return cmd
+}
+
+func newHarnessesCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "harnesses",
+		Short: "List built-in coding-harness presets",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprintln(cmd.OutOrStdout(), "HARNESS\tPROJECT SKILLS\tGLOBAL SKILLS\tDESCRIPTION")
+			for _, info := range bmo.Harnesses() {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t~/%s\t%s\n", info.Name, info.ProjectDir, info.GlobalDir, info.Description)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "\nInstall with: bmo add SOURCE HARNESS")
+			fmt.Fprintln(cmd.OutOrStdout(), "Install to detected harnesses with: bmo add SOURCE everyone")
+			fmt.Fprintln(cmd.OutOrStdout(), "For any other harness, pass --skills-dir PATH.")
+		},
+	}
+}
+
+func addHarnessFlags(cmd *cobra.Command, opts *options) {
+	cmd.Flags().StringVar(&opts.harness, "harness", "", "Target harness (default claude; see `bmo harnesses`)")
+	cmd.Flags().StringVar(&opts.skillsDir, "skills-dir", "", "Use an explicit skills directory for any other harness")
+}
+
+func targetFor(scope bmo.Scope, cwd string, opts *options) (bmo.Target, error) {
+	return bmo.ResolveTarget(opts.harness, scope, cwd, opts.skillsDir)
 }
 
 func selectedScope(opts *options) bmo.Scope {
@@ -563,6 +796,34 @@ func splitScopeKeyword(args []string) (rest []string, keyword string, err error)
 		rest = append(rest, arg)
 	}
 	return rest, keyword, nil
+}
+
+// splitAddKeywords extracts both location and harness keywords accepted by
+// `bmo add`. Harness names are positional aliases for --harness; "everyone"
+// selects every harness detected on the machine.
+func splitAddKeywords(args []string) (rest []string, scopeKeyword, harnessKeyword string, err error) {
+	harnessNames := map[string]bool{"everyone": true}
+	for _, name := range bmo.HarnessNames() {
+		harnessNames[name] = true
+	}
+	for _, arg := range args {
+		if arg == "here" || arg == "everywhere" {
+			if scopeKeyword != "" {
+				return nil, "", "", errors.New("specify only one location keyword (here or everywhere)")
+			}
+			scopeKeyword = arg
+			continue
+		}
+		if harnessNames[arg] {
+			if harnessKeyword != "" {
+				return nil, "", "", errors.New("specify only one harness (or everyone)")
+			}
+			harnessKeyword = arg
+			continue
+		}
+		rest = append(rest, arg)
+	}
+	return rest, scopeKeyword, harnessKeyword, nil
 }
 
 // keywordScope resolves the scope for commands that act on a single scope (add,
@@ -631,14 +892,16 @@ func selectSkill(root, name string) (bmo.Skill, error) {
 	return bmo.Skill{}, fmt.Errorf("multiple skills found; use --name to choose one: %s", strings.Join(names, ", "))
 }
 
-func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, scope bmo.Scope, dest, agentsDir string) {
-	fmt.Fprintf(cmd.OutOrStdout(), "Found skill: %s\nDescription: %s\n\nSource: %s\nScope: %s\nDestination: %s\nFiles: %d\n", skill.Name, skill.Description, source, scope, dest, skill.FileCount)
+func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, target bmo.Target, dest string) {
+	fmt.Fprintf(cmd.OutOrStdout(), "Found skill: %s\nDescription: %s\n\nSource: %s\nHarness: %s\nScope: %s\nDestination: %s\nFiles: %d\n", skill.Name, skill.Description, source, target.Harness, target.Scope, dest, skill.FileCount)
 	if skill.IgnoreRules > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Excludes: %d .bmoignore rules applied\n", skill.IgnoreRules)
 	}
-	if len(skill.Agents) > 0 {
+	if len(skill.Agents) > 0 && target.SupportsAgents() {
 		fmt.Fprintf(cmd.OutOrStdout(), "Subagents: %s\nSubagent destination: %s\n",
-			strings.Join(bmo.AgentNames(skill.Agents), ", "), agentsDir)
+			strings.Join(bmo.AgentNames(skill.Agents), ", "), target.AgentsDir)
+	} else if len(skill.Agents) > 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "Bundled agents remain skill resources (their format is harness-specific).")
 	}
 	if len(skill.ExecutableFiles) > 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "\nThis skill includes executable-looking files:")
@@ -662,6 +925,14 @@ func confirm(cmd *cobra.Command, prompt string) (bool, error) {
 
 // installBmoSkill installs the bundled bmo skill from the embedded copy.
 func installBmoSkill(scope bmo.Scope, cwd string, force bool) (bmo.SkillMeta, error) {
+	target, err := bmo.ResolveTarget("", scope, cwd, "")
+	if err != nil {
+		return bmo.SkillMeta{}, err
+	}
+	return installBmoSkillToTarget(target, cwd, force)
+}
+
+func installBmoSkillToTarget(target bmo.Target, cwd string, force bool) (bmo.SkillMeta, error) {
 	src, err := bmo.ParseSource(bmo.EmbeddedSkillName)
 	if err != nil {
 		return bmo.SkillMeta{}, err
@@ -676,7 +947,8 @@ func installBmoSkill(scope bmo.Scope, cwd string, force bool) (bmo.SkillMeta, er
 		return bmo.SkillMeta{}, err
 	}
 	return bmo.InstallSkill(bmo.InstallOptions{
-		Scope:  scope,
+		Scope:  target.Scope,
+		Target: target,
 		Force:  force,
 		CWD:    cwd,
 		Source: resolved.Source,
@@ -694,10 +966,10 @@ func shouldBootstrap(cmd *cobra.Command, args []string) bool {
 		}
 	}
 	switch cmd.Name() {
-	case "init", "help", "__complete", "__completeNoDesc":
+	case "init", "harnesses", "help", "__complete", "__completeNoDesc":
 		return false
 	case "add":
-		rest, _, err := splitScopeKeyword(args)
+		rest, _, _, err := splitAddKeywords(args)
 		if err == nil && len(rest) == 1 && bmo.IsEmbeddedSource(rest[0]) {
 			return false
 		}
@@ -709,7 +981,31 @@ func shouldBootstrap(cmd *cobra.Command, args []string) bool {
 // run. A sentinel file records that it happened so a later `bmo remove bmo`
 // sticks. All failures are non-fatal — bmo should still run without it.
 func bootstrapBmoSkill(cmd *cobra.Command) {
-	marker, err := bmo.BootstrapMarkerPath()
+	bootstrapBmoSkillForOptions(cmd, nil, &options{})
+}
+
+func bootstrapBmoSkillForOptions(cmd *cobra.Command, args []string, opts *options) {
+	if opts.skillsDir != "" {
+		return
+	}
+	harnessName := opts.harness
+	if cmd.Name() == "add" {
+		_, _, positionalHarness, err := splitAddKeywords(args)
+		if err == nil && positionalHarness != "" {
+			if opts.harness != "" {
+				return
+			}
+			if positionalHarness == "everyone" {
+				return
+			}
+			harnessName = positionalHarness
+		}
+	}
+	harness, err := bmo.ParseHarness(harnessName)
+	if err != nil {
+		return
+	}
+	marker, err := bmo.BootstrapMarkerPathFor(harness)
 	if err != nil {
 		return
 	}
@@ -720,22 +1016,30 @@ func bootstrapBmoSkill(cmd *cobra.Command) {
 	if err != nil {
 		return
 	}
-	if !bmoSkillTracked(cwd) {
-		if meta, err := installBmoSkill(bmo.ScopeGlobal, cwd, false); err == nil {
+	target, err := bmo.ResolveTarget(string(harness), bmo.ScopeGlobal, cwd, "")
+	if err != nil {
+		return
+	}
+	if !bmoSkillTrackedInTarget(target) {
+		if meta, err := installBmoSkillToTarget(target, cwd, false); err == nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "bmo: installed the bmo skill to %s (run `bmo remove bmo` to undo)\n", meta.InstalledPath)
 		}
 	}
-	markBootstrapped()
+	markBootstrappedFor(harness)
 }
 
 // bmoSkillTracked reports whether the bmo skill is already recorded in global
 // metadata.
 func bmoSkillTracked(cwd string) bool {
-	path, err := bmo.GlobalMetadataPath()
+	target, err := bmo.ResolveTarget("", bmo.ScopeGlobal, cwd, "")
 	if err != nil {
 		return false
 	}
-	meta, err := bmo.ReadMetadata(path)
+	return bmoSkillTrackedInTarget(target)
+}
+
+func bmoSkillTrackedInTarget(target bmo.Target) bool {
+	meta, err := bmo.ReadMetadata(target.MetadataPath)
 	if err != nil {
 		return false
 	}
@@ -745,7 +1049,11 @@ func bmoSkillTracked(cwd string) bool {
 
 // markBootstrapped writes the sentinel file recording the one-time install.
 func markBootstrapped() {
-	marker, err := bmo.BootstrapMarkerPath()
+	markBootstrappedFor(bmo.HarnessClaude)
+}
+
+func markBootstrappedFor(harness bmo.Harness) {
+	marker, err := bmo.BootstrapMarkerPathFor(harness)
 	if err != nil {
 		return
 	}
@@ -763,12 +1071,26 @@ func cleanupResolved(resolved bmo.ResolvedSource) {
 
 func listEntries(cwd string, opts *options) ([]bmo.SkillMeta, error) {
 	var entries []bmo.SkillMeta
-	if !opts.project {
-		path, err := bmo.GlobalMetadataPath()
+	if opts.skillsDir != "" {
+		target, err := targetFor(selectedScope(opts), cwd, opts)
 		if err != nil {
 			return nil, err
 		}
-		meta, err := bmo.ReadMetadata(path)
+		meta, err := bmo.ReadMetadata(target.MetadataPath)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range meta.Skills {
+			entries = append(entries, entry)
+		}
+		return entries, nil
+	}
+	if !opts.project {
+		target, err := targetFor(bmo.ScopeGlobal, cwd, opts)
+		if err != nil {
+			return nil, err
+		}
+		meta, err := bmo.ReadMetadata(target.MetadataPath)
 		if err != nil {
 			return nil, err
 		}
@@ -777,7 +1099,11 @@ func listEntries(cwd string, opts *options) ([]bmo.SkillMeta, error) {
 		}
 	}
 	if !opts.global {
-		meta, err := bmo.ReadMetadata(bmo.ProjectMetadataPath(cwd))
+		target, err := targetFor(bmo.ScopeProject, cwd, opts)
+		if err != nil {
+			return nil, err
+		}
+		meta, err := bmo.ReadMetadata(target.MetadataPath)
 		if err != nil {
 			return nil, err
 		}
@@ -799,19 +1125,27 @@ func listEntries(cwd string, opts *options) ([]bmo.SkillMeta, error) {
 // inside them. With a skill name, only the places tracking that skill run.
 func updateEverywhere(cmd *cobra.Command, cwd string, args []string, opts *options, cache map[string]bmo.ResolvedSource) error {
 	out := cmd.OutOrStdout()
+	if opts.skillsDir != "" {
+		return errors.New("update everywhere cannot discover arbitrary --skills-dir locations; choose --project or --global")
+	}
+	currentProject, err := targetFor(bmo.ScopeProject, cwd, opts)
+	if err != nil {
+		return err
+	}
 	// Backfill: repos installed into before the registry existed register the
 	// first time an update runs inside them.
-	if hasTrackedSkills(bmo.ProjectMetadataPath(cwd)) {
+	if hasTrackedSkills(currentProject.MetadataPath) {
 		_ = bmo.RecordProject(cwd)
 	}
 	named := ""
 	if len(args) == 1 {
 		named = args[0]
 	}
-	globalPath, err := bmo.GlobalMetadataPath()
+	global, err := targetFor(bmo.ScopeGlobal, cwd, opts)
 	if err != nil {
 		return err
 	}
+	globalPath := global.MetadataPath
 	found := false
 	if (named == "" && hasTrackedSkills(globalPath)) || (named != "" && metadataHasSkill(globalPath, named)) {
 		fmt.Fprintln(out, "Global:")
@@ -829,7 +1163,11 @@ func updateEverywhere(cmd *cobra.Command, cwd string, args []string, opts *optio
 			fmt.Fprintf(out, "\nSkipping %s (directory no longer exists)\n", dir)
 			continue
 		}
-		metaPath := bmo.ProjectMetadataPath(dir)
+		project, err := targetFor(bmo.ScopeProject, dir, opts)
+		if err != nil {
+			return err
+		}
+		metaPath := project.MetadataPath
 		if (named == "" && !hasTrackedSkills(metaPath)) || (named != "" && !metadataHasSkill(metaPath, named)) {
 			continue
 		}
@@ -868,11 +1206,11 @@ func metadataHasSkill(path, name string) bool {
 }
 
 func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string, opts *options, cache map[string]bmo.ResolvedSource) error {
-	_, metadataPath, err := bmo.ScopePaths(scope, cwd)
+	target, err := targetFor(scope, cwd, opts)
 	if err != nil {
 		return err
 	}
-	meta, err := bmo.ReadMetadata(metadataPath)
+	meta, err := bmo.ReadMetadata(target.MetadataPath)
 	if err != nil {
 		return err
 	}
@@ -914,7 +1252,7 @@ func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string,
 			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date\n", name)
 			continue
 		}
-		_, err = bmo.InstallSkill(bmo.InstallOptions{Scope: scope, Name: name, Force: true, DryRun: opts.dryRun, CWD: cwd, Source: resolved.Source, Skill: skill})
+		_, err = bmo.InstallSkill(bmo.InstallOptions{Scope: scope, Target: target, Name: name, Force: true, DryRun: opts.dryRun, CWD: cwd, Source: resolved.Source, Skill: skill})
 		if err != nil {
 			return err
 		}

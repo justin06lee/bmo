@@ -11,13 +11,17 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Skill struct {
-	Path            string
-	Name            string
+	Path string
+	Name string
+	// DeclaredName is the literal frontmatter name. Claude permits it to be
+	// omitted, while portable Agent Skills hosts require it to match the folder.
+	DeclaredName    string
 	Description     string
 	FileCount       int
 	NotableFiles    []string
@@ -34,7 +38,7 @@ type Frontmatter struct {
 	Description string `yaml:"description"`
 }
 
-var SkillNameRE = regexp.MustCompile(`^[a-z0-9-]+$`)
+var SkillNameRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 var ignoredDirs = map[string]bool{
 	".git":         true,
@@ -138,8 +142,8 @@ func ValidateSkill(dir, nameOverride string) (Skill, error) {
 	if err := ValidateSkillName(name); err != nil {
 		return Skill{}, err
 	}
-	skill := Skill{Path: dir, Name: name, Description: fm.Description}
-	if len(fm.Description) > 1024 {
+	skill := Skill{Path: dir, Name: name, DeclaredName: fm.Name, Description: fm.Description}
+	if utf8.RuneCountInString(fm.Description) > 1024 {
 		skill.Warnings = append(skill.Warnings, "description is longer than 1024 characters")
 	}
 	ignore, err := LoadIgnore(dir)
@@ -195,7 +199,7 @@ func ValidateSkillName(name string) error {
 		return errors.New("skill name must be 64 characters or fewer")
 	}
 	if !SkillNameRE.MatchString(name) {
-		return errors.New("skill name must match ^[a-z0-9-]+$")
+		return errors.New("skill name must use lowercase letters and digits separated by single hyphens")
 	}
 	return nil
 }
