@@ -107,6 +107,40 @@ bmo update here               # update only this project's skills
 The `--project` / `--global` flags are equivalent. `bmo list` and `bmo update`
 with no keyword or flag cover both scopes.
 
+Location and harness tokens can appear anywhere around the source, and flags
+can follow them in any order. For example, all of these are valid:
+
+```bash
+bmo add everywhere owner/repo everyone --all --yes
+bmo add here owner/repo everyone
+bmo add codex owner/repo here --dry-run
+```
+
+Do not combine `--project` with `--global`, `--all` with `--name`, or a
+positional harness with `--harness`/`--skills-dir`.
+
+### Naming a harness positionally
+
+`add`, `init`, `list`, `remove`, `update`, and `doctor` all accept a harness
+name as a plain positional word — the friendlier alias for `--harness`:
+
+```bash
+bmo init codex                 # install the bundled skill for Codex
+bmo list here codex            # this project's Codex skills
+bmo update codex               # every skill tracked for Codex
+bmo remove cool-skill codex    # remove from Codex
+bmo doctor codex               # diagnose Codex's destinations
+```
+
+`everyone` works only with `add`; the other commands act on a single harness
+and reject it with an explanation.
+
+Two disambiguation rules matter when a skill is *named* like a harness:
+`bmo remove codex` removes the skill named `codex` (remove always needs a
+name), while `bmo remove codex codex` removes it from the Codex harness.
+`bmo update codex` means "update everything tracked for Codex", since update's
+name argument is optional.
+
 ### Updating
 
 `bmo update` re-resolves each tracked skill's original source, compares a

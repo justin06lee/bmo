@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -15,8 +16,11 @@ import (
 const descriptionWidth = 48
 
 // printSkillList renders tracked skills grouped by scope: one bold header per
-// scope carrying the shared skills directory, then aligned rows of the
-// per-skill facts. now is injected so tests are deterministic.
+// scope carrying the harness and the shared skills directory, then aligned rows
+// of the per-skill facts. The harness lives in the header rather than in a
+// column because one listing reads exactly one harness's metadata, so a
+// per-row value would repeat itself. now is injected so tests are
+// deterministic.
 func printSkillList(w io.Writer, entries []bmo.SkillMeta, cwd string, now time.Time) {
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No skills installed.")
@@ -42,7 +46,11 @@ func printSkillList(w io.Writer, entries []bmo.SkillMeta, cwd string, now time.T
 			fmt.Fprintln(w)
 		}
 		first = false
-		fmt.Fprintf(w, "%s%s%s  %s%s%s\n", bold, scopeTitle(scope), reset, dim, shortenPath(filepath.Dir(group[0].InstalledPath), cwd), reset)
+		fmt.Fprintf(w, "%s%s%s %s(%s)%s  %s%s%s\n",
+			bold, scopeTitle(scope), reset,
+			dim, harnessLabel(group), reset,
+			dim, shortenPath(filepath.Dir(group[0].InstalledPath), cwd), reset,
+		)
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "  NAME\tSOURCE\tAGENTS\tUPDATED\tDESCRIPTION")
 		for _, entry := range group {
@@ -60,6 +68,29 @@ func printSkillList(w io.Writer, entries []bmo.SkillMeta, cwd string, now time.T
 		}
 		tw.Flush()
 	}
+}
+
+// harnessLabel names the harness behind a scope group. Metadata written before
+// the harness field existed carries an empty value, which has always meant
+// Claude Code, so it is normalized rather than shown as a blank. A group should
+// only ever hold one harness; if it somehow holds several, every distinct name
+// is listed in sorted order so the header stays honest and stable instead of
+// crediting the whole group to whichever entry happened to come first.
+func harnessLabel(group []bmo.SkillMeta) string {
+	seen := make(map[string]bool, len(group))
+	names := make([]string, 0, 1)
+	for _, entry := range group {
+		name := string(entry.Harness)
+		if name == "" {
+			name = string(bmo.HarnessClaude)
+		}
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 func scopeTitle(scope bmo.Scope) string {

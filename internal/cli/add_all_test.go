@@ -126,6 +126,31 @@ func TestAddAcceptsPositionalHarness(t *testing.T) {
 	}
 }
 
+func TestAddAcceptsExplicitGlobalFlagInAnyPosition(t *testing.T) {
+	home := t.TempDir()
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+
+	out, err := runBmo(t, home, "add", "--global", "codex", src, "--yes")
+	if err != nil {
+		t.Fatalf("explicit global install failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "alpha", "SKILL.md")); err != nil {
+		t.Fatalf("expected global Codex install: %v", err)
+	}
+}
+
+func TestAddRejectsConflictingScopeFlags(t *testing.T) {
+	home := t.TempDir()
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+
+	out, err := runBmo(t, home, "add", src, "--project", "--global", "--yes")
+	if err == nil || !strings.Contains(err.Error(), "none of the others") {
+		t.Fatalf("expected mutually exclusive scope error, got %v\n%s", err, out)
+	}
+}
+
 func TestAddAllForPortableHarnessValidatesBeforeWriting(t *testing.T) {
 	home := t.TempDir()
 	src := t.TempDir()
@@ -157,18 +182,48 @@ func TestAddEveryoneInstallsToDetectedHarnesses(t *testing.T) {
 	}
 	src := t.TempDir()
 	writeSourceSkill(t, src, "alpha")
+	writeSourceSkill(t, src, "beta")
 
-	out, err := runBmo(t, home, "add", src, "everyone", "--yes")
+	out, err := runBmo(t, home, "add", "everywhere", src, "everyone", "--all", "--yes")
 	if err != nil {
 		t.Fatalf("add everyone failed: %v\n%s", err, out)
 	}
 	for _, dir := range []string{".agents/skills", ".gemini/skills", ".config/agents/skills"} {
-		if _, err := os.Stat(filepath.Join(home, filepath.FromSlash(dir), "alpha", "SKILL.md")); err != nil {
-			t.Fatalf("expected everyone install in %s: %v\n%s", dir, err, out)
+		for _, name := range []string{"alpha", "beta"} {
+			if _, err := os.Stat(filepath.Join(home, filepath.FromSlash(dir), name, "SKILL.md")); err != nil {
+				t.Fatalf("expected everyone install of %s in %s: %v\n%s", name, dir, err, out)
+			}
 		}
 	}
-	if !strings.Contains(out, "3 detected harness(es)") || !strings.Contains(out, "Installed 3 skill copies") {
+	if !strings.Contains(out, "3 detected harness(es)") || !strings.Contains(out, "Installed 6 skill copies") {
 		t.Fatalf("unexpected everyone summary:\n%s", out)
+	}
+}
+
+func TestAddHereEveryoneInstallsOnlyInsideProject(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	for _, dir := range []string{".codex", ".gemini"} {
+		if err := os.MkdirAll(filepath.Join(home, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+	t.Chdir(project)
+
+	out, err := runBmo(t, home, "add", "here", src, "everyone", "--yes")
+	if err != nil {
+		t.Fatalf("add here everyone failed: %v\n%s", err, out)
+	}
+	for _, dir := range []string{".agents/skills", ".gemini/skills"} {
+		if _, err := os.Stat(filepath.Join(project, filepath.FromSlash(dir), "alpha", "SKILL.md")); err != nil {
+			t.Fatalf("expected project install in %s: %v\n%s", dir, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(home, filepath.FromSlash(dir), "alpha")); !os.IsNotExist(err) {
+			t.Fatalf("here install unexpectedly wrote global %s: %v", dir, err)
+		}
 	}
 }
 
@@ -315,5 +370,53 @@ func TestAddAllReportsInvalidSkill(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(home, ".claude", "skills", "alpha")); !os.IsNotExist(statErr) {
 		t.Fatal("a batch with an invalid skill must install nothing")
+	}
+}
+
+func TestUpdateReportsFailuresWithoutStrandingOtherSkills(t *testing.T) {
+	home := t.TempDir()
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+	writeSourceSkill(t, src, "zeta")
+
+	if out, err := runBmo(t, home, "add", filepath.Join(src, "skills", "alpha"), "--yes"); err != nil {
+		t.Fatalf("install alpha: %v\n%s", err, out)
+	}
+	if out, err := runBmo(t, home, "add", filepath.Join(src, "skills", "zeta"), "--yes"); err != nil {
+		t.Fatalf("install zeta: %v\n%s", err, out)
+	}
+
+	// Break the source that sorts first; the later skill must still be updated.
+	if err := os.RemoveAll(filepath.Join(src, "skills", "alpha")); err != nil {
+		t.Fatal(err)
+	}
+	zeta := filepath.Join(src, "skills", "zeta", "SKILL.md")
+	if err := os.WriteFile(zeta, []byte("---\nname: zeta\ndescription: The zeta skill.\n---\n# zeta v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runBmo(t, home, "update")
+	if err == nil {
+		t.Fatalf("expected the broken skill to be reported as an error:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "alpha") {
+		t.Fatalf("expected the failure to name alpha, got %v", err)
+	}
+	if !strings.Contains(out, "Updated zeta") {
+		t.Fatalf("expected zeta to update despite alpha failing:\n%s\n%v", out, err)
+	}
+	installed, readErr := os.ReadFile(filepath.Join(home, ".claude", "skills", "zeta", "SKILL.md"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(installed), "zeta v2") {
+		t.Fatalf("expected zeta to carry the new content, got %q", installed)
+	}
+}
+
+func TestDoctorRejectsConflictingScopeFlags(t *testing.T) {
+	out, err := runBmo(t, t.TempDir(), "doctor", "--project", "--global")
+	if err == nil || !strings.Contains(err.Error(), "none of the others") {
+		t.Fatalf("expected mutually exclusive scope error, got %v\n%s", err, out)
 	}
 }

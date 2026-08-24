@@ -123,8 +123,11 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 	}
 	commitAgents()
 	// Subagents the previous version shipped and this one dropped would
-	// otherwise linger in the agents directory forever.
-	if existing != nil {
+	// otherwise linger in the agents directory forever. Targets without an agent
+	// destination are skipped: agentsDir is empty there, so tracked filenames
+	// would resolve against the process working directory and delete whatever
+	// happens to share their name.
+	if existing != nil && target.SupportsAgents() {
 		if stale := staleAgents(existing.Agents, skill.Agents); len(stale) > 0 {
 			removeAgents(stale, agentsDir)
 		}
@@ -150,20 +153,12 @@ type Conflict struct {
 	Agents []string
 }
 
-// CheckInstallConflicts reports what an install of skill would overwrite.
+// CheckInstallConflictsForTarget reports what an install of skill would
+// overwrite at one resolved destination.
 //
 // Batch installs use this to decide before writing anything: a partial install
 // that stops halfway through leaves the user with an incoherent set of skills,
 // so every conflict is surfaced up front.
-func CheckInstallConflicts(skill Skill, scope Scope, cwd string) (Conflict, error) {
-	target, err := ResolveTarget("", scope, cwd, "")
-	if err != nil {
-		return Conflict{}, err
-	}
-	return CheckInstallConflictsForTarget(skill, target)
-}
-
-// CheckInstallConflictsForTarget is the harness-aware conflict check.
 func CheckInstallConflictsForTarget(skill Skill, target Target) (Conflict, error) {
 	skillsDir, metadataPath := target.SkillsDir, target.MetadataPath
 	conflict := Conflict{Skill: skill.Name}
@@ -214,13 +209,17 @@ func RemoveSkillFromTarget(name string, target Target) (SkillMeta, error) {
 	if err := withinDir(skillsDir, entry.InstalledPath); err != nil {
 		return SkillMeta{}, fmt.Errorf("refusing to remove %s: %w", name, err)
 	}
+	// Every reason to refuse is checked before the first deletion. Rejecting a
+	// removal after the skill directory is gone would leave the metadata entry
+	// pointing at files that no longer exist, which `bmo list` still reports and
+	// the user cannot restore.
+	if len(entry.Agents) > 0 && !target.SupportsAgents() {
+		return SkillMeta{}, fmt.Errorf("metadata tracks subagents but harness %s has no compatible agent destination", target.Harness)
+	}
 	if err := os.RemoveAll(entry.InstalledPath); err != nil {
 		return SkillMeta{}, err
 	}
 	if len(entry.Agents) > 0 {
-		if !target.SupportsAgents() {
-			return SkillMeta{}, fmt.Errorf("metadata tracks subagents but harness %s has no compatible agent destination", target.Harness)
-		}
 		if err := removeAgents(entry.Agents, target.AgentsDir); err != nil {
 			return SkillMeta{}, err
 		}

@@ -133,6 +133,98 @@ func TestInstallForCodexDoesNotExportClaudeAgents(t *testing.T) {
 	}
 }
 
+func TestSupportsAgentsTreatsZeroHarnessAsClaude(t *testing.T) {
+	agentsDir := filepath.Join(t.TempDir(), "agents")
+	cases := []struct {
+		name   string
+		target Target
+		want   bool
+	}{
+		{"claude", Target{Harness: HarnessClaude, AgentsDir: agentsDir}, true},
+		{"zero harness is historical claude", Target{AgentsDir: agentsDir}, true},
+		{"claude without destination", Target{Harness: HarnessClaude}, false},
+		{"zero target", Target{}, false},
+		{"codex", Target{Harness: HarnessCodex, AgentsDir: agentsDir}, false},
+		{"custom", Target{Harness: HarnessCustom, AgentsDir: agentsDir}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.target.SupportsAgents(); got != tc.want {
+				t.Fatalf("SupportsAgents() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A zero-harness target records subagents in metadata, so it has to install
+// them too; disagreeing would track subagents that were never written.
+func TestSupportsAgentsMatchesMetadataAgentTracking(t *testing.T) {
+	skill := Skill{Name: "demo", Agents: []Agent{{File: "worker.md", Name: "worker"}}}
+	agentsDir := filepath.Join(t.TempDir(), "agents")
+	for _, target := range []Target{
+		{Scope: ScopeGlobal, AgentsDir: agentsDir},
+		{Harness: HarnessClaude, Scope: ScopeGlobal, AgentsDir: agentsDir},
+	} {
+		meta := NewSkillMetaForTarget(skill, target, Source{}, "/tmp/demo", nil)
+		if len(meta.Agents) > 0 && !target.SupportsAgents() {
+			t.Fatalf("target %+v tracks agents it would never install", target)
+		}
+	}
+}
+
+func TestResolveTargetAgentDestinations(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	for _, scope := range []Scope{ScopeGlobal, ScopeProject} {
+		target, err := ResolveTarget("claude", scope, project, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target.AgentsDir == "" || !target.SupportsAgents() {
+			t.Fatalf("resolved claude target (%s) must support agents: %+v", scope, target)
+		}
+	}
+	for _, name := range HarnessNames() {
+		if name == string(HarnessClaude) {
+			continue
+		}
+		target, err := ResolveTarget(name, ScopeProject, project, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target.AgentsDir != "" || target.SupportsAgents() {
+			t.Fatalf("%s must not resolve a Claude agents destination: %+v", name, target)
+		}
+	}
+	custom, err := ResolveTarget("", ScopeProject, project, "tools/skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if custom.AgentsDir != "" || custom.SupportsAgents() {
+		t.Fatalf("custom target must not resolve an agents destination: %+v", custom)
+	}
+}
+
+// Without a home directory there is no valid global destination, so resolution
+// must fail rather than hand back a target with empty paths.
+func TestResolveTargetFailsClosedWithoutHomeDirectory(t *testing.T) {
+	project := t.TempDir()
+	t.Setenv("HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	for _, name := range HarnessNames() {
+		target, err := ResolveTarget(name, ScopeGlobal, project, "")
+		if err == nil {
+			t.Fatalf("%s: expected an error without a home directory, got %+v", name, target)
+		}
+		if target != (Target{}) {
+			t.Fatalf("%s: expected a zero target on error, got %+v", name, target)
+		}
+	}
+}
+
 func TestPortableHarnessRequiresDeclaredMatchingName(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -169,5 +261,29 @@ func TestPortableHarnessRequiresDeclaredMatchingName(t *testing.T) {
 	}
 	if _, err := InstallSkill(InstallOptions{Scope: ScopeGlobal, Target: target, Name: "renamed", Source: Source{Raw: declared, Type: SourceLocal}, Skill: skill}); err == nil || !strings.Contains(err.Error(), "match the installed folder") {
 		t.Fatalf("renamed portable skill error = %v", err)
+	}
+}
+
+func TestInvocationHintPerHarness(t *testing.T) {
+	// The hint is printed after every install, so a wrong prefix teaches the
+	// user an invocation their harness does not understand.
+	cases := map[Harness]string{
+		HarnessClaude:   "/demo",
+		HarnessCursor:   "/demo",
+		HarnessCopilot:  "/demo",
+		HarnessAmp:      "/demo",
+		HarnessCodex:    "$demo",
+		HarnessWindsurf: "@demo",
+	}
+	for harness, want := range cases {
+		if got := (Target{Harness: harness}).InvocationHint("demo"); got != want {
+			t.Errorf("InvocationHint(%s) = %q, want %q", harness, got, want)
+		}
+	}
+	for _, harness := range []Harness{HarnessGemini, HarnessOpenCode, HarnessCline, HarnessCustom, ""} {
+		got := (Target{Harness: harness}).InvocationHint("demo")
+		if !strings.Contains(got, "demo") {
+			t.Errorf("InvocationHint(%q) = %q, want it to name the skill", harness, got)
+		}
 	}
 }

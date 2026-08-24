@@ -149,13 +149,14 @@ bmo init
 Install a skill from a source.
 
 ```bash
-bmo add SOURCE [HARNESS|everyone] [here|everywhere] [--all] [--project] [--name NAME] [--force] [--yes] [--dry-run]
+bmo add [here|everywhere] SOURCE [HARNESS|everyone] [--all] [--project | --global] [--name NAME] [--force] [--yes] [--dry-run]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--all` | Install every skill the source contains, instead of picking one |
 | `--project` | Install to the current harness's project directory instead of globally |
+| `--global` | Install to the harness's global directory (the default) |
 | `--harness` | Backward-compatible alias for the positional harness name |
 | `--skills-dir` | Target an explicit directory for any other Agent Skills-compatible harness |
 | `--name` | Override the skill name for legacy Claude installs (portable harnesses require it to match the declared frontmatter name); cannot be combined with `--all` |
@@ -190,11 +191,14 @@ The `github:` prefix is optional — a bare `owner/repo` is treated as GitHub. L
 
 When no ref is specified, bmo tries `main` first, then falls back to `master`.
 
-Harness and location keywords may appear in either order:
+The source, harness, and location keywords may appear in any order. Regular
+flags can be mixed in as usual:
 
 ```bash
 bmo add owner/repo codex here
 bmo add owner/repo here gemini
+bmo add everywhere owner/repo everyone --all --yes
+bmo add here owner/repo everyone
 ```
 
 `everyone` detects harnesses whose CLI is on `PATH` or whose user configuration directory already exists. It preflights every destination, asks once, and installs only to detected harnesses. Destinations shared by multiple harnesses—such as the project-level `.agents/skills` used by Codex and Amp—are written once.
@@ -204,12 +208,13 @@ bmo add owner/repo here gemini
 Install the `bmo` skill that ships bundled inside the binary.
 
 ```bash
-bmo init [--project] [--harness NAME | --skills-dir PATH]
+bmo init [--project | --global] [--harness NAME | --skills-dir PATH]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--project` | Install into the target harness's project directory instead of globally |
+| `--global` | Install into the target harness's global directory (the default) |
 | `--harness` | Target a built-in harness preset (default: `claude`) |
 | `--skills-dir` | Target an explicit skills directory |
 
@@ -231,7 +236,7 @@ Shows the skill name, description, file count (after `.bmoignore` is applied), h
 List installed skills.
 
 ```bash
-bmo list [--project] [--global] [--harness NAME | --skills-dir PATH] [--json]
+bmo list [here|everywhere] [HARNESS] [--project | --global] [--harness NAME | --skills-dir PATH] [--json]
 ```
 
 | Flag | Description |
@@ -249,7 +254,7 @@ By default (no flags), lists both global and project skills.
 Uninstall a skill.
 
 ```bash
-bmo remove SKILL_NAME [--project] [--global] [--harness NAME | --skills-dir PATH] [--yes]
+bmo remove SKILL_NAME [here|everywhere] [HARNESS] [--project | --global] [--harness NAME | --skills-dir PATH] [--yes]
 ```
 
 | Flag | Description |
@@ -267,7 +272,7 @@ Removes the skill directory from disk and its entry from the metadata file. Any 
 Refresh installed skills whose source content changed.
 
 ```bash
-bmo update [--project] [--global] [--harness NAME | --skills-dir PATH] [--yes] [--dry-run]
+bmo update [SKILL_NAME] [here|everywhere] [HARNESS] [--project | --global] [--harness NAME | --skills-dir PATH] [--yes] [--dry-run]
 bmo update SKILL_NAME [--project] [--global] [--harness NAME | --skills-dir PATH] [--yes] [--dry-run]
 ```
 
@@ -313,7 +318,7 @@ are still downloaded only once per run.
 Run system diagnostics.
 
 ```bash
-bmo doctor [--harness NAME | --skills-dir PATH]
+bmo doctor [here|everywhere] [HARNESS] [--harness NAME | --skills-dir PATH]
 ```
 
 Checks:
@@ -433,9 +438,9 @@ The rules apply to every walk: which files are copied, which subagents are insta
 
 ### Picking a scope: `here` / `everywhere`
 
-`add`, `init`, `list`, `remove`, and `update` take an optional location keyword
-as a plain positional word — a friendlier alias for the `--project` / `--global`
-flags:
+`add`, `init`, `list`, `remove`, `update`, and `doctor` take an optional
+location keyword as a plain positional word — a friendlier alias for the
+`--project` / `--global` flags:
 
 | Keyword | Meaning | Equivalent flag |
 |---------|---------|-----------------|
@@ -458,6 +463,30 @@ keyword or flag is given (`bmo list` with neither still lists both scopes). The
 One exception: on `update`, `everywhere` reaches further than the global scope —
 it also updates every registered project repo. See
 [`bmo update everywhere`](#bmo-update-everywhere-every-repo-at-once).
+
+### Naming a harness positionally
+
+The same commands accept a harness name as a plain positional word, anywhere in
+the arguments — a friendlier alias for `--harness`:
+
+```bash
+bmo init codex                   # install the bundled skill for Codex
+bmo list here codex              # this project's Codex skills
+bmo update codex                 # every skill tracked for Codex
+bmo remove cool-skill codex      # remove from Codex
+bmo doctor codex                 # diagnose Codex's destinations
+```
+
+`everyone` is only meaningful for `add`, which installs to every detected
+harness at once; the other commands act on one harness and reject it with an
+explanation. A positional harness cannot be combined with `--harness` or
+`--skills-dir`.
+
+Because `remove` requires a skill name, a lone harness-shaped word there is read
+as the skill: `bmo remove codex` removes a skill *named* `codex`, while
+`bmo remove codex codex` removes it from the Codex harness. `update` has no
+required argument, so `bmo update codex` means "update everything tracked for
+Codex"; a skill named `codex` is covered by a plain `bmo update`.
 
 ---
 

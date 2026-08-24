@@ -203,6 +203,12 @@ func installAgents(agents []Agent, srcDir, agentsDir string) (rollback func(), c
 // removeAgents deletes tracked agent files from agentsDir. Files that are
 // already gone are not an error: the goal is that they no longer exist.
 func removeAgents(files []string, agentsDir string) error {
+	// An empty directory would make every path below relative to the process's
+	// working directory, so a harness with no agent destination could delete
+	// same-named files out of whatever repo bmo happened to be run in.
+	if len(files) > 0 && strings.TrimSpace(agentsDir) == "" {
+		return errors.New("refusing to remove agents: no agents directory resolved")
+	}
 	for _, file := range files {
 		target := filepath.Join(agentsDir, filepath.Base(file))
 		if err := withinDir(agentsDir, target); err != nil {

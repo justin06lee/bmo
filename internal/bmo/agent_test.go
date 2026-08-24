@@ -394,3 +394,25 @@ func doctorMessages(checks []DoctorCheck, status DoctorStatus) []string {
 	}
 	return out
 }
+
+func TestRemoveAgentsRefusesEmptyDir(t *testing.T) {
+	// A harness with no agents destination must never delete files relative to
+	// the working directory.
+	dir := t.TempDir()
+	decoy := filepath.Join(dir, "seo.md")
+	if err := os.WriteFile(decoy, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	if err := removeAgents([]string{"seo.md"}, ""); err == nil {
+		t.Fatal("expected an error when the agents directory is empty")
+	}
+	if _, err := os.Stat(decoy); err != nil {
+		t.Fatalf("expected %s to survive, got %v", decoy, err)
+	}
+	// No files to remove stays a no-op.
+	if err := removeAgents(nil, ""); err != nil {
+		t.Fatalf("expected no error for an empty file list, got %v", err)
+	}
+}

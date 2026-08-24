@@ -55,45 +55,84 @@ func TestShouldBootstrapCompletionSubcommands(t *testing.T) {
 	}
 }
 
-func TestSplitScopeKeyword(t *testing.T) {
+func TestSplitKeywords(t *testing.T) {
 	cases := []struct {
 		name        string
 		args        []string
+		minArgs     int
 		wantRest    []string
-		wantKeyword string
+		wantScope   string
+		wantHarness string
 		wantErr     bool
 	}{
-		{"no keyword", []string{"owner/repo"}, []string{"owner/repo"}, "", false},
-		{"here before source", []string{"here", "owner/repo"}, []string{"owner/repo"}, "here", false},
-		{"everywhere after source", []string{"owner/repo", "everywhere"}, []string{"owner/repo"}, "everywhere", false},
-		{"keyword only", []string{"here"}, nil, "here", false},
-		{"empty args", nil, nil, "", false},
-		{"two keywords is an error", []string{"here", "everywhere"}, nil, "", true},
+		{name: "no keyword", args: []string{"owner/repo"}, wantRest: []string{"owner/repo"}},
+		{name: "here before source", args: []string{"here", "owner/repo"}, wantRest: []string{"owner/repo"}, wantScope: "here"},
+		{name: "everywhere after source", args: []string{"owner/repo", "everywhere"}, wantRest: []string{"owner/repo"}, wantScope: "everywhere"},
+		{name: "keyword only", args: []string{"here"}, wantScope: "here"},
+		{name: "empty args", args: nil},
+		{name: "harness after a required name", args: []string{"demo", "codex"}, minArgs: 1, wantRest: []string{"demo"}, wantHarness: "codex"},
+		{name: "harness before a required name", args: []string{"codex", "demo"}, minArgs: 1, wantRest: []string{"demo"}, wantHarness: "codex"},
+		// Stripping the token would leave the command without its required
+		// argument, so it is the skill's name.
+		{name: "lone harness name is the required arg", args: []string{"codex"}, minArgs: 1, wantRest: []string{"codex"}},
+		{name: "lone harness name is a harness when nothing is required", args: []string{"codex"}, wantHarness: "codex"},
+		{name: "leftmost harness name fills the required arg", args: []string{"codex", "cursor"}, minArgs: 1, wantRest: []string{"codex"}, wantHarness: "cursor"},
+		{name: "everyone is never a skill name", args: []string{"everyone"}, minArgs: 1, wantHarness: "everyone"},
+		{name: "two locations is an error", args: []string{"here", "everywhere"}, wantErr: true},
+		{name: "two harnesses is an error", args: []string{"owner/repo", "codex", "gemini"}, wantErr: true},
+		{name: "two harnesses is an error even with one demoted", args: []string{"codex", "cursor", "amp"}, minArgs: 1, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rest, keyword, err := splitScopeKeyword(tc.args)
+			rest, scope, harness, err := splitKeywords(tc.args, tc.minArgs)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("splitScopeKeyword(%v) = nil error, want error", tc.args)
+					t.Fatalf("splitKeywords(%v, %d) = nil error, want error", tc.args, tc.minArgs)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("splitScopeKeyword(%v) unexpected error: %v", tc.args, err)
+				t.Fatalf("splitKeywords(%v, %d) unexpected error: %v", tc.args, tc.minArgs, err)
 			}
-			if keyword != tc.wantKeyword {
-				t.Fatalf("keyword = %q, want %q", keyword, tc.wantKeyword)
+			if scope != tc.wantScope || harness != tc.wantHarness {
+				t.Fatalf("scope, harness = %q, %q, want %q, %q", scope, harness, tc.wantScope, tc.wantHarness)
 			}
-			if len(rest) != len(tc.wantRest) {
+			if strings.Join(rest, ",") != strings.Join(tc.wantRest, ",") {
 				t.Fatalf("rest = %v, want %v", rest, tc.wantRest)
 			}
-			for i := range rest {
-				if rest[i] != tc.wantRest[i] {
-					t.Fatalf("rest = %v, want %v", rest, tc.wantRest)
-				}
+		})
+	}
+}
+
+func TestSplitHarnessKeywordsRejectsEveryone(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		minArgs int
+	}{
+		{"list-style command", []string{"everyone"}, 0},
+		{"remove-style command", []string{"demo", "everyone"}, 1},
+		{"everyone alone where a name is required", []string{"everyone"}, 1},
+		{"everyone beside a location", []string{"here", "everyone"}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := splitHarnessKeywords(tc.args, tc.minArgs)
+			if err == nil || !strings.Contains(err.Error(), "only supported by bmo add") {
+				t.Fatalf("splitHarnessKeywords(%v, %d) error = %v, want the everyone explanation", tc.args, tc.minArgs, err)
 			}
 		})
+	}
+}
+
+func TestSplitAddKeywordsMatchesSplitKeywords(t *testing.T) {
+	// `bmo add` has one positional (the source), so no token is ever demoted.
+	for _, args := range [][]string{{"owner/repo", "codex"}, {"everyone"}, {"codex"}, {"here", "owner/repo"}} {
+		rest, scope, harness, err := splitAddKeywords(args)
+		wantRest, wantScope, wantHarness, wantErr := splitKeywords(args, 0)
+		if err != wantErr || scope != wantScope || harness != wantHarness || strings.Join(rest, ",") != strings.Join(wantRest, ",") {
+			t.Fatalf("splitAddKeywords(%v) = %v, %q, %q, %v", args, rest, scope, harness, err)
+		}
 	}
 }
 
@@ -124,6 +163,23 @@ func TestSplitAddKeywords(t *testing.T) {
 	}
 }
 
+func TestSplitAddKeywordsAcceptsEveryOrdering(t *testing.T) {
+	orders := [][]string{
+		{"owner/repo", "everywhere", "everyone"},
+		{"owner/repo", "everyone", "everywhere"},
+		{"everywhere", "owner/repo", "everyone"},
+		{"everywhere", "everyone", "owner/repo"},
+		{"everyone", "owner/repo", "everywhere"},
+		{"everyone", "everywhere", "owner/repo"},
+	}
+	for _, args := range orders {
+		rest, scope, harness, err := splitAddKeywords(args)
+		if err != nil || strings.Join(rest, ",") != "owner/repo" || scope != "everywhere" || harness != "everyone" {
+			t.Fatalf("splitAddKeywords(%v) = %v, %q, %q, %v", args, rest, scope, harness, err)
+		}
+	}
+}
+
 func TestKeywordScope(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -135,7 +191,9 @@ func TestKeywordScope(t *testing.T) {
 		{"everywhere means global", "everywhere", &options{}, bmo.ScopeGlobal},
 		{"default is global", "", &options{}, bmo.ScopeGlobal},
 		{"project flag without keyword", "", &options{project: true}, bmo.ScopeProject},
-		{"keyword wins over default", "here", &options{}, bmo.ScopeProject},
+		{"global flag without keyword", "", &options{global: true}, bmo.ScopeGlobal},
+		{"here wins over global flag", "here", &options{global: true}, bmo.ScopeProject},
+		{"everywhere wins over project flag", "everywhere", &options{project: true}, bmo.ScopeGlobal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,7 +287,7 @@ func TestBootstrapBmoSkillInstallsAndMarks(t *testing.T) {
 func TestInitInstallsBundledSkillForCodex(t *testing.T) {
 	home := isolateHome(t)
 	cmd := NewRootCommand()
-	cmd.SetArgs([]string{"init", "--harness", "codex"})
+	cmd.SetArgs([]string{"init", "--global", "--harness", "codex"})
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
 	if err := cmd.Execute(); err != nil {
@@ -244,6 +302,134 @@ func TestInitInstallsBundledSkillForCodex(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", bmo.EmbeddedSkillName)); !os.IsNotExist(err) {
 		t.Fatalf("Codex init should not install into Claude: %v", err)
+	}
+}
+
+func TestHarnessAwareCommandsAcceptPositionalHarness(t *testing.T) {
+	home := isolateHome(t)
+	t.Chdir(t.TempDir()) // doctor probes the project dir; keep it out of the repo
+
+	if out, err := runBmo(t, home, "init", "codex"); err != nil {
+		t.Fatalf("bmo init codex failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", bmo.EmbeddedSkillName, "SKILL.md")); err != nil {
+		t.Fatalf("expected the positional harness to install for Codex: %v", err)
+	}
+
+	out, err := runBmo(t, home, "list", "everywhere", "codex", "--json")
+	if err != nil {
+		t.Fatalf("bmo list everywhere codex failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, bmo.EmbeddedSkillName) {
+		t.Fatalf("expected Codex metadata in the listing:\n%s", out)
+	}
+
+	out, err = runBmo(t, home, "doctor", "codex")
+	if err != nil {
+		t.Fatalf("bmo doctor codex failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, filepath.Join(home, ".agents", "skills")) {
+		t.Fatalf("expected doctor to report Codex paths:\n%s", out)
+	}
+	if strings.Contains(out, filepath.Join(home, ".claude", "skills")) {
+		t.Fatalf("doctor answered for Claude on a Codex run:\n%s", out)
+	}
+}
+
+func TestRemoveReadsALoneHarnessNameAsTheSkill(t *testing.T) {
+	home := isolateHome(t)
+	t.Chdir(t.TempDir())
+	src := t.TempDir()
+	writeSourceSkill(t, src, "codex")
+
+	if out, err := runBmo(t, home, "add", src, "--yes"); err != nil {
+		t.Fatalf("add failed: %v\n%s", err, out)
+	}
+	out, err := runBmo(t, home, "remove", "codex", "--yes")
+	if err != nil {
+		t.Fatalf("bmo remove codex failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Removed codex") {
+		t.Fatalf("expected the skill named codex to be removed:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "codex")); !os.IsNotExist(err) {
+		t.Fatalf("expected the Claude install to be gone: %v", err)
+	}
+}
+
+func TestRemoveAcceptsPositionalHarnessBesideTheSkillName(t *testing.T) {
+	home := isolateHome(t)
+	t.Chdir(t.TempDir())
+	src := t.TempDir()
+	writeSourceSkill(t, src, "demo")
+
+	if out, err := runBmo(t, home, "add", src, "codex", "--yes"); err != nil {
+		t.Fatalf("add failed: %v\n%s", err, out)
+	}
+	out, err := runBmo(t, home, "remove", "demo", "codex", "--yes")
+	if err != nil {
+		t.Fatalf("bmo remove demo codex failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "demo")); !os.IsNotExist(err) {
+		t.Fatalf("expected the Codex install to be gone: %v", err)
+	}
+}
+
+func TestAddEveryoneWarnsAboutExecutableFiles(t *testing.T) {
+	home := isolateHome(t)
+	t.Chdir(t.TempDir())
+	t.Setenv("PATH", t.TempDir()) // detect harnesses by config dir alone
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	writeSourceSkill(t, src, "alpha")
+	if err := os.WriteFile(filepath.Join(src, "skills", "alpha", "setup.sh"), []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runBmo(t, home, "add", src, "everyone", "--dry-run")
+	if err != nil {
+		t.Fatalf("add everyone failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "These skills include executable-looking files:") ||
+		!strings.Contains(out, "- alpha") ||
+		!strings.Contains(out, "Skills may include executable code. Review third-party skills before use.") {
+		t.Fatalf("expected the everyone preview to warn about executable files:\n%s", out)
+	}
+	if !strings.Contains(out, filepath.Join(home, ".agents", "skills")) {
+		t.Fatalf("expected the destination summary to survive:\n%s", out)
+	}
+}
+
+func TestHarnessAwareCommandsRejectBadArguments(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"doctor rejects a stray argument", []string{"doctor", "bogus-arg"}, "unknown command"},
+		{"list rejects a stray argument", []string{"list", "bogus-arg"}, "unknown command"},
+		{"init rejects everyone", []string{"init", "everyone"}, "only supported by bmo add"},
+		{"list rejects everyone", []string{"list", "everyone"}, "only supported by bmo add"},
+		{"remove rejects everyone", []string{"remove", "everyone"}, "only supported by bmo add"},
+		{"update rejects everyone", []string{"update", "everyone"}, "only supported by bmo add"},
+		{"doctor rejects everyone", []string{"doctor", "everyone"}, "only supported by bmo add"},
+		{"positional harness beside --harness", []string{"init", "codex", "--harness", "gemini"}, "cannot be combined"},
+		{"positional harness beside --skills-dir", []string{"list", "codex", "--skills-dir", "sk"}, "cannot be combined"},
+		{"list rejects both scope flags", []string{"list", "--project", "--global"}, "none of the others"},
+		{"update rejects both scope flags", []string{"update", "--project", "--global"}, "none of the others"},
+		{"remove rejects both scope flags", []string{"remove", "demo", "--project", "--global"}, "none of the others"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolateHome(t)
+			t.Chdir(t.TempDir())
+			out, err := runBmo(t, home, tc.args...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("bmo %s error = %v, want one containing %q\n%s", strings.Join(tc.args, " "), err, tc.want, out)
+			}
+		})
 	}
 }
 

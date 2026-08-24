@@ -213,15 +213,24 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 	// validates. Other harnesses use different schemas, so their agents/ folder
 	// remains a skill resource instead of being exported as live configuration.
 	if harness == HarnessClaude {
-		target.AgentsDir, err = AgentsDir(scope, cwd)
+		agentsDir, err := AgentsDir(scope, cwd)
+		// A resolved Claude target with an empty AgentsDir would silently stop
+		// supporting agents, so an unresolvable home directory fails outright
+		// rather than handing back a half-populated target.
+		if err != nil {
+			return Target{}, err
+		}
+		target.AgentsDir = agentsDir
 	}
-	return target, err
+	return target, nil
 }
 
 // SupportsAgents reports whether bmo can safely export bundled agent files for
-// this target.
+// this target. A zero-value harness is Claude Code, matching the metadata this
+// package records for the same target: treating it as unsupported here would
+// track subagents that were never installed.
 func (t Target) SupportsAgents() bool {
-	return t.Harness == HarnessClaude && t.AgentsDir != ""
+	return (t.Harness == HarnessClaude || t.Harness == "") && t.AgentsDir != ""
 }
 
 // ValidateSkillForTarget enforces the portable common denominator for every

@@ -95,10 +95,6 @@ func WriteMetadata(path string, meta Metadata) error {
 	return nil
 }
 
-func NewSkillMeta(skill Skill, scope Scope, source Source, installedPath string, existing *SkillMeta) SkillMeta {
-	return NewSkillMetaForTarget(skill, Target{Harness: HarnessClaude, Scope: scope}, source, installedPath, existing)
-}
-
 // NewSkillMetaForTarget records the harness alongside the original metadata.
 // The omitempty field keeps old Claude metadata readable and diff-friendly.
 func NewSkillMetaForTarget(skill Skill, target Target, source Source, installedPath string, existing *SkillMeta) SkillMeta {
