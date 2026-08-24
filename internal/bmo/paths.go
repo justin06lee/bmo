@@ -65,15 +65,11 @@ func ProjectMetadataPath(cwd string) string {
 	return filepath.Join(cwd, ".claude", "bmo-lock.json")
 }
 
-// BootstrapMarkerPath returns the sentinel file that records the one-time
-// first-run install of the bundled bmo skill. Its presence stops bmo from
-// re-installing the skill on every invocation (so `bmo remove bmo` sticks).
-func BootstrapMarkerPath() (string, error) {
-	return BootstrapMarkerPathFor(HarnessClaude)
-}
-
-// BootstrapMarkerPathFor returns a per-harness sentinel. The Claude path is
-// kept unchanged so upgrades do not repeat the historical first-run install.
+// BootstrapMarkerPathFor returns the sentinel file that records the one-time
+// first-run install of the bundled bmo skill for a harness. Its presence stops
+// bmo from re-installing the skill on every invocation (so `bmo remove bmo`
+// sticks). The Claude path is kept unchanged so upgrades do not repeat the
+// historical first-run install.
 func BootstrapMarkerPathFor(harness Harness) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -96,15 +92,4 @@ func ScopePaths(scope Scope, cwd string) (skillsDir string, metadataPath string,
 	}
 	metadataPath, err = GlobalMetadataPath()
 	return skillsDir, metadataPath, err
-}
-
-// ScopePathsFor resolves skill and metadata paths for a named harness. It is
-// the multi-harness counterpart to ScopePaths, which remains Claude-compatible
-// for callers compiled against older bmo releases.
-func ScopePathsFor(harnessName string, scope Scope, cwd string) (skillsDir string, metadataPath string, err error) {
-	target, err := ResolveTarget(harnessName, scope, cwd, "")
-	if err != nil {
-		return "", "", err
-	}
-	return target.SkillsDir, target.MetadataPath, nil
 }

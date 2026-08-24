@@ -118,25 +118,10 @@ func checkMetadataEntries(path string) []DoctorCheck {
 	return checks
 }
 
-// checkAgents verifies that every subagent bmo installed on a skill's behalf is
-// still on disk, and that no two skills in the same scope claim the same
-// subagent file — a collision means one skill's specialist silently answers for
-// the other.
-func checkAgents(cwd string) []DoctorCheck {
-	globalMeta, err := GlobalMetadataPath()
-	if err != nil {
-		return nil
-	}
-	globalAgents, err := GlobalAgentsDir()
-	if err != nil {
-		return nil
-	}
-	return checkAgentsForTargets(
-		Target{Harness: HarnessClaude, Scope: ScopeGlobal, MetadataPath: globalMeta, AgentsDir: globalAgents},
-		Target{Harness: HarnessClaude, Scope: ScopeProject, MetadataPath: ProjectMetadataPath(cwd), AgentsDir: ProjectAgentsDir(cwd)},
-	)
-}
-
+// checkAgentsForTargets verifies that every subagent bmo installed on a skill's
+// behalf is still on disk, and that no two skills in the same scope claim the
+// same subagent file — a collision means one skill's specialist silently
+// answers for the other. Targets with no agent destination are skipped.
 func checkAgentsForTargets(targets ...Target) []DoctorCheck {
 	var checks []DoctorCheck
 	for _, target := range targets {
@@ -173,16 +158,6 @@ func checkAgentsForTargets(targets ...Target) []DoctorCheck {
 		}
 	}
 	return checks
-}
-
-func checkDuplicates(cwd string) []DoctorCheck {
-	globalMetaPath, err := GlobalMetadataPath()
-	if err != nil {
-		return nil
-	}
-	globalMeta, _ := ReadMetadata(globalMetaPath)
-	projectMeta, _ := ReadMetadata(ProjectMetadataPath(cwd))
-	return checkDuplicateMetadata(globalMeta, projectMeta)
 }
 
 func checkDuplicatesForTargets(global, project Target) []DoctorCheck {

@@ -57,8 +57,11 @@ func NewRootCommand() *cobra.Command {
 
 func newAddCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add SOURCE [here|everywhere] [HARNESS|everyone]",
+		Use:   "add [here|everywhere] SOURCE [HARNESS|everyone]",
 		Short: "Install a coding-agent skill",
+		Example: `  bmo add everywhere owner/repo everyone
+  bmo add here owner/repo codex
+  bmo add --global gemini owner/repo --all --yes`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			rest, _, _, err := splitAddKeywords(args)
 			if err != nil {
@@ -75,14 +78,11 @@ func newAddCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			effective := *opts
-			if positionalHarness != "" {
-				if opts.harness != "" || opts.skillsDir != "" {
-					return errors.New("a positional harness cannot be combined with --harness or --skills-dir")
-				}
-				effective.harness = positionalHarness
+			effective, err := withPositionalHarness(opts, positionalHarness)
+			if err != nil {
+				return err
 			}
-			scope := keywordScope(keyword, opts)
+			scope := keywordScope(keyword, effective)
 			src, err := bmo.ParseSource(args[0])
 			if err != nil {
 				return err
@@ -92,15 +92,15 @@ func newAddCommand(opts *options) *cobra.Command {
 				return err
 			}
 			defer cleanupResolved(resolved)
-			if positionalHarness == "everyone" {
-				return addEveryone(cmd, resolved, scope, cwd, &effective)
+			if positionalHarness == everyoneKeyword {
+				return addEveryone(cmd, resolved, scope, cwd, effective)
 			}
-			target, err := targetFor(scope, cwd, &effective)
+			target, err := targetFor(scope, cwd, effective)
 			if err != nil {
 				return err
 			}
 			if effective.all {
-				return addAll(cmd, resolved, src, scope, cwd, &effective)
+				return addAll(cmd, resolved, src, scope, cwd, effective)
 			}
 			skill, err := selectSkill(resolved.Root, effective.name)
 			if err != nil {
@@ -156,12 +156,14 @@ func newAddCommand(opts *options) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into the harness's project skills directory")
+	cmd.Flags().BoolVar(&opts.global, "global", false, "Install into the harness's global skills directory")
 	cmd.Flags().StringVar(&opts.name, "name", "", "Override destination skill folder name")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "Replace an existing installed skill")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would happen without copying files")
 	cmd.Flags().BoolVar(&opts.all, "all", false, "Install every skill the source contains")
 	addHarnessFlags(cmd, opts)
+	cmd.MarkFlagsMutuallyExclusive("project", "global")
 	return cmd
 }
 
@@ -387,6 +389,23 @@ func addEveryone(cmd *cobra.Command, resolved bmo.ResolvedSource, scope bmo.Scop
 		fmt.Fprintf(out, "  %-24s %s\n", strings.Join(destination.harnesses, ", "), destination.target.SkillsDir)
 	}
 	fmt.Fprintln(out)
+	// Fanning one source out to every harness at once is the widest install bmo
+	// performs, so it must not be the one that hides what the other previews warn
+	// about.
+	var withExecutables []string
+	for _, skill := range skills {
+		if len(skill.ExecutableFiles) > 0 {
+			withExecutables = append(withExecutables, skill.Name)
+		}
+	}
+	if len(withExecutables) > 0 {
+		fmt.Fprintln(out, "These skills include executable-looking files:")
+		for _, name := range withExecutables {
+			fmt.Fprintf(out, "- %s\n", name)
+		}
+		fmt.Fprintln(out, "\nSkills may include executable code. Review third-party skills before use.")
+		fmt.Fprintln(out)
+	}
 	if !opts.yes && !opts.dryRun {
 		ok, err := confirm(cmd, "Install for everyone? [y/N] ")
 		if err != nil {
@@ -482,20 +501,26 @@ func printBatchPreview(cmd *cobra.Command, skills []bmo.Skill, source string, ta
 
 func newInitCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "init [here|everywhere]",
+		Use:   "init [here|everywhere] [HARNESS]",
 		Short: "Install the bundled bmo skill into a coding harness",
-		Args:  argsWithKeyword(cobra.NoArgs),
+		Example: `  bmo init here
+  bmo init codex`,
+		Args: argsWithKeywords(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			_, keyword, err := splitScopeKeyword(args)
+			_, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
 			if err != nil {
 				return err
 			}
-			scope := keywordScope(keyword, opts)
-			target, err := targetFor(scope, cwd, opts)
+			effective, err := withPositionalHarness(opts, positionalHarness)
+			if err != nil {
+				return err
+			}
+			scope := keywordScope(keyword, effective)
+			target, err := targetFor(scope, cwd, effective)
 			if err != nil {
 				return err
 			}
@@ -509,7 +534,9 @@ func newInitCommand(opts *options) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into the harness's project skills directory")
+	cmd.Flags().BoolVar(&opts.global, "global", false, "Install into the harness's global skills directory")
 	addHarnessFlags(cmd, opts)
+	cmd.MarkFlagsMutuallyExclusive("project", "global")
 	return cmd
 }
 
@@ -563,24 +590,30 @@ func newInspectCommand() *cobra.Command {
 
 func newListCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "list [here|everywhere]",
+		Use:   "list [here|everywhere] [HARNESS]",
 		Short: "List installed skills tracked by bmo",
-		Args:  argsWithKeyword(cobra.NoArgs),
+		Example: `  bmo list here
+  bmo list codex`,
+		Args: argsWithKeywords(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			_, keyword, err := splitScopeKeyword(args)
+			_, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
 			if err != nil {
 				return err
 			}
-			applyKeywordFilter(keyword, opts)
-			entries, err := listEntries(cwd, opts)
+			effective, err := withPositionalHarness(opts, positionalHarness)
 			if err != nil {
 				return err
 			}
-			if opts.json {
+			applyKeywordFilter(keyword, effective)
+			entries, err := listEntries(cwd, effective)
+			if err != nil {
+				return err
+			}
+			if effective.json {
 				if entries == nil {
 					entries = []bmo.SkillMeta{}
 				}
@@ -594,25 +627,32 @@ func newListCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Show only global installs")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output JSON")
 	addHarnessFlags(cmd, opts)
+	cmd.MarkFlagsMutuallyExclusive("project", "global")
 	return cmd
 }
 
 func newRemoveCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "remove SKILL_NAME [here|everywhere]",
+		Use:   "remove SKILL_NAME [here|everywhere] [HARNESS]",
 		Short: "Remove an installed skill",
-		Args:  argsWithKeyword(cobra.ExactArgs(1)),
+		Example: `  bmo remove demo here
+  bmo remove demo codex`,
+		Args: argsWithKeywords(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			args, keyword, err := splitScopeKeyword(args)
+			args, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
 			if err != nil {
 				return err
 			}
-			scope := keywordScope(keyword, opts)
-			target, err := targetFor(scope, cwd, opts)
+			effective, err := withPositionalHarness(opts, positionalHarness)
+			if err != nil {
+				return err
+			}
+			scope := keywordScope(keyword, effective)
+			target, err := targetFor(scope, cwd, effective)
 			if err != nil {
 				return err
 			}
@@ -629,7 +669,7 @@ func newRemoveCommand(opts *options) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Also removes %d subagents from %s: %s\n",
 					len(entry.Agents), target.AgentsDir, strings.Join(entry.Agents, ", "))
 			}
-			if !opts.yes {
+			if !effective.yes {
 				ok, err := confirm(cmd, "Remove? [y/N] ")
 				if err != nil {
 					return err
@@ -650,14 +690,17 @@ func newRemoveCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Use global metadata")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	addHarnessFlags(cmd, opts)
+	cmd.MarkFlagsMutuallyExclusive("project", "global")
 	return cmd
 }
 
 func newUpdateCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "update [SKILL_NAME] [here|everywhere]",
+		Use:   "update [SKILL_NAME] [here|everywhere] [HARNESS]",
 		Short: "Update installed skills whose source content changed",
-		Args: argsWithKeyword(func(cmd *cobra.Command, args []string) error {
+		Example: `  bmo update demo here
+  bmo update codex`,
+		Args: argsWithKeywords(func(cmd *cobra.Command, args []string) error {
 			if opts.all {
 				return cobra.NoArgs(cmd, args)
 			}
@@ -668,12 +711,16 @@ func newUpdateCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			args, keyword, err := splitScopeKeyword(args)
+			args, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
+			if err != nil {
+				return err
+			}
+			effective, err := withPositionalHarness(opts, positionalHarness)
 			if err != nil {
 				return err
 			}
 			if len(args) == 0 {
-				opts.all = true
+				effective.all = true
 			}
 			// Skills tracked from the same source share one download per run.
 			cache := map[string]bmo.ResolvedSource{}
@@ -685,15 +732,15 @@ func newUpdateCommand(opts *options) *cobra.Command {
 			// On update, "everywhere" reaches past the current directory:
 			// global skills plus every project bmo has ever installed into.
 			if keyword == "everywhere" {
-				return updateEverywhere(cmd, cwd, args, opts, cache)
+				return updateEverywhere(cmd, cwd, args, effective, cache)
 			}
-			applyKeywordFilter(keyword, opts)
-			scopes := []bmo.Scope{selectedScope(opts)}
-			if opts.all && !opts.project && !opts.global {
+			applyKeywordFilter(keyword, effective)
+			scopes := []bmo.Scope{selectedScope(effective)}
+			if effective.all && !effective.project && !effective.global {
 				scopes = []bmo.Scope{bmo.ScopeGlobal, bmo.ScopeProject}
 			}
 			for _, scope := range scopes {
-				if err := updateScope(cmd, cwd, scope, args, opts, cache); err != nil {
+				if err := updateScope(cmd, cwd, scope, args, effective, cache); err != nil {
 					return err
 				}
 			}
@@ -706,30 +753,46 @@ func newUpdateCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would happen without copying files")
 	addHarnessFlags(cmd, opts)
+	cmd.MarkFlagsMutuallyExclusive("project", "global")
 	return cmd
 }
 
 func newDoctorCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "doctor",
+		Use:   "doctor [here|everywhere] [HARNESS]",
 		Short: "Check local bmo and coding-harness skill setup",
+		Example: `  bmo doctor
+  bmo doctor codex`,
+		// Without a validator cobra accepts anything, and doctor would answer
+		// for the default harness while silently dropping the argument.
+		Args: argsWithKeywords(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			_, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
+			if err != nil {
+				return err
+			}
+			effective, err := withPositionalHarness(opts, positionalHarness)
 			if err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "bmo doctor")
 			fmt.Fprintln(cmd.OutOrStdout())
 			var checks []bmo.DoctorCheck
-			if opts.skillsDir != "" {
-				target, err := targetFor(selectedScope(opts), cwd, opts)
+			if effective.skillsDir != "" {
+				// A built-in harness is reported for both scopes below, so the
+				// location keyword only has to disambiguate a custom directory.
+				target, err := targetFor(keywordScope(keyword, effective), cwd, effective)
 				if err != nil {
 					return err
 				}
 				checks = bmo.RunDoctorForTarget(target)
 			} else {
 				var err error
-				checks, err = bmo.RunDoctorForHarness(cwd, opts.harness)
+				checks, err = bmo.RunDoctorForHarness(cwd, effective.harness)
 				if err != nil {
 					return err
 				}
@@ -743,6 +806,7 @@ func newDoctorCommand(opts *options) *cobra.Command {
 	addHarnessFlags(cmd, opts)
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Treat a custom skills directory as project-scoped")
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Treat a custom skills directory as global")
+	cmd.MarkFlagsMutuallyExclusive("project", "global")
 	return cmd
 }
 
@@ -779,51 +843,100 @@ func selectedScope(opts *options) bmo.Scope {
 	return bmo.ScopeGlobal
 }
 
-// splitScopeKeyword pulls an optional "here" / "everywhere" location keyword out
-// of a command's positional args. "here" means the current project,
-// "everywhere" means the global install. It returns the args with the keyword
-// removed plus the keyword that was found (empty string if none). Specifying
-// more than one keyword is an error.
-func splitScopeKeyword(args []string) (rest []string, keyword string, err error) {
-	for _, arg := range args {
-		if arg == "here" || arg == "everywhere" {
-			if keyword != "" {
-				return nil, "", errors.New("specify only one location keyword (here or everywhere)")
-			}
-			keyword = arg
-			continue
-		}
-		rest = append(rest, arg)
-	}
-	return rest, keyword, nil
-}
+// everyoneKeyword fans an install out to every detected harness. Only `bmo add`
+// writes to more than one destination, so the other commands reject it.
+const everyoneKeyword = "everyone"
 
-// splitAddKeywords extracts both location and harness keywords accepted by
-// `bmo add`. Harness names are positional aliases for --harness; "everyone"
-// selects every harness detected on the machine.
-func splitAddKeywords(args []string) (rest []string, scopeKeyword, harnessKeyword string, err error) {
-	harnessNames := map[string]bool{"everyone": true}
+// splitKeywords pulls the optional location keyword ("here" / "everywhere") and
+// an optional harness token out of a command's positional args, returning what
+// is left for the command itself. "here" means the current project,
+// "everywhere" means the global install; a harness name is a positional alias
+// for --harness. Naming two of either is an error.
+//
+// minArgs is how many positional args the command still needs. A skill may
+// legitimately be named after a harness, so when consuming a harness token
+// would starve the command of a required argument (`bmo remove codex`) the
+// leftmost such tokens stay positional instead. "everyone" is never demoted
+// that way: it is a fan-out keyword rather than a plausible skill name, and
+// commands that cannot honor it say so explicitly.
+func splitKeywords(args []string, minArgs int) (rest []string, scopeKeyword, harnessKeyword string, err error) {
+	harnessNames := map[string]bool{everyoneKeyword: true}
 	for _, name := range bmo.HarnessNames() {
 		harnessNames[name] = true
 	}
+	// Counted up front so the outcome does not depend on argument order.
+	demotable := minArgs
 	for _, arg := range args {
-		if arg == "here" || arg == "everywhere" {
+		if arg != "here" && arg != "everywhere" && !harnessNames[arg] {
+			demotable--
+		}
+	}
+	for _, arg := range args {
+		switch {
+		case arg == "here" || arg == "everywhere":
 			if scopeKeyword != "" {
 				return nil, "", "", errors.New("specify only one location keyword (here or everywhere)")
 			}
 			scopeKeyword = arg
-			continue
-		}
-		if harnessNames[arg] {
+		case harnessNames[arg] && (demotable <= 0 || arg == everyoneKeyword):
 			if harnessKeyword != "" {
 				return nil, "", "", errors.New("specify only one harness (or everyone)")
 			}
 			harnessKeyword = arg
-			continue
+		default:
+			if harnessNames[arg] {
+				demotable--
+			}
+			rest = append(rest, arg)
 		}
-		rest = append(rest, arg)
 	}
 	return rest, scopeKeyword, harnessKeyword, nil
+}
+
+// splitAddKeywords extracts the keywords accepted by `bmo add`, whose only
+// positional is the source, so no harness token is ever ambiguous there.
+func splitAddKeywords(args []string) (rest []string, scopeKeyword, harnessKeyword string, err error) {
+	return splitKeywords(args, 0)
+}
+
+// splitHarnessKeywords is splitKeywords for the harness-aware commands other
+// than add. They resolve exactly one destination, so "everyone" cannot mean
+// anything for them and is reported instead of being taken for a harness or a
+// skill name.
+func splitHarnessKeywords(args []string, minArgs int) (rest []string, scopeKeyword, harnessKeyword string, err error) {
+	rest, scopeKeyword, harnessKeyword, err = splitKeywords(args, minArgs)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if harnessKeyword == everyoneKeyword {
+		return nil, "", "", errors.New(`"everyone" installs to every detected harness and is only supported by bmo add; run this command per harness instead`)
+	}
+	return rest, scopeKeyword, harnessKeyword, nil
+}
+
+// minPositionalArgs reports how many positional args a harness-aware command
+// still needs once its keywords are stripped. Only remove takes a required
+// name, and that name may itself be a harness name.
+func minPositionalArgs(cmd *cobra.Command) int {
+	if cmd.Name() == "remove" {
+		return 1
+	}
+	return 0
+}
+
+// withPositionalHarness copies opts and folds in a positional harness token.
+// The options struct is shared by every command's flags, so a command must work
+// from its own copy rather than mutate it.
+func withPositionalHarness(opts *options, harness string) (*options, error) {
+	effective := *opts
+	if harness == "" {
+		return &effective, nil
+	}
+	if opts.harness != "" || opts.skillsDir != "" {
+		return nil, errors.New("a positional harness cannot be combined with --harness or --skills-dir")
+	}
+	effective.harness = harness
+	return &effective, nil
 }
 
 // keywordScope resolves the scope for commands that act on a single scope (add,
@@ -852,11 +965,13 @@ func applyKeywordFilter(keyword string, opts *options) {
 	}
 }
 
-// argsWithKeyword wraps a cobra positional-args validator so it counts args
-// after an optional location keyword has been stripped out.
-func argsWithKeyword(base cobra.PositionalArgs) cobra.PositionalArgs {
+// argsWithKeywords wraps a cobra positional-args validator so it counts args
+// after the optional location and harness keywords have been stripped out.
+// Wrapping the real validator keeps stray arguments an error instead of
+// something the command silently ignores.
+func argsWithKeywords(base cobra.PositionalArgs) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
-		rest, _, err := splitScopeKeyword(args)
+		rest, _, _, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
 		if err != nil {
 			return err
 		}
@@ -923,15 +1038,6 @@ func confirm(cmd *cobra.Command, prompt string) (bool, error) {
 	return answer == "y" || answer == "yes", nil
 }
 
-// installBmoSkill installs the bundled bmo skill from the embedded copy.
-func installBmoSkill(scope bmo.Scope, cwd string, force bool) (bmo.SkillMeta, error) {
-	target, err := bmo.ResolveTarget("", scope, cwd, "")
-	if err != nil {
-		return bmo.SkillMeta{}, err
-	}
-	return installBmoSkillToTarget(target, cwd, force)
-}
-
 func installBmoSkillToTarget(target bmo.Target, cwd string, force bool) (bmo.SkillMeta, error) {
 	src, err := bmo.ParseSource(bmo.EmbeddedSkillName)
 	if err != nil {
@@ -989,17 +1095,16 @@ func bootstrapBmoSkillForOptions(cmd *cobra.Command, args []string, opts *option
 		return
 	}
 	harnessName := opts.harness
-	if cmd.Name() == "add" {
-		_, _, positionalHarness, err := splitAddKeywords(args)
-		if err == nil && positionalHarness != "" {
-			if opts.harness != "" {
-				return
-			}
-			if positionalHarness == "everyone" {
-				return
-			}
-			harnessName = positionalHarness
+	// A positional harness names where this run is aimed, so the first-run
+	// install follows it instead of seeding a harness the user never mentioned.
+	if positionalHarness := positionalHarnessFor(cmd, args); positionalHarness != "" {
+		if opts.harness != "" {
+			return
 		}
+		if positionalHarness == everyoneKeyword {
+			return
+		}
+		harnessName = positionalHarness
 	}
 	harness, err := bmo.ParseHarness(harnessName)
 	if err != nil {
@@ -1028,6 +1133,22 @@ func bootstrapBmoSkillForOptions(cmd *cobra.Command, args []string, opts *option
 	markBootstrappedFor(harness)
 }
 
+// positionalHarnessFor reports the harness token a harness-aware command was
+// given, parsed the same way that command parses it. Commands that take no
+// harness token (and any parse error, which the command itself will report)
+// yield an empty name.
+func positionalHarnessFor(cmd *cobra.Command, args []string) string {
+	switch cmd.Name() {
+	case "add", "init", "list", "remove", "update", "doctor":
+		_, _, harness, err := splitKeywords(args, minPositionalArgs(cmd))
+		if err != nil {
+			return ""
+		}
+		return harness
+	}
+	return ""
+}
+
 // bmoSkillTracked reports whether the bmo skill is already recorded in global
 // metadata.
 func bmoSkillTracked(cwd string) bool {
@@ -1047,11 +1168,7 @@ func bmoSkillTrackedInTarget(target bmo.Target) bool {
 	return ok
 }
 
-// markBootstrapped writes the sentinel file recording the one-time install.
-func markBootstrapped() {
-	markBootstrappedFor(bmo.HarnessClaude)
-}
-
+// markBootstrappedFor writes the sentinel file recording the one-time install.
 func markBootstrappedFor(harness bmo.Harness) {
 	marker, err := bmo.BootstrapMarkerPathFor(harness)
 	if err != nil {
@@ -1227,17 +1344,21 @@ func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string,
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	// One unreachable source or newly invalid skill must not strand the rest:
+	// updating many skills is the common case, and aborting the sweep would
+	// leave whichever names happened to sort later permanently stale.
+	var failures []string
 	for _, name := range names {
 		entry := targets[name]
 		resolved, ok := cache[entry.Source]
 		if !ok {
 			src, err := bmo.ParseSource(entry.Source)
-			if err != nil {
-				return err
+			if err == nil {
+				resolved, err = bmo.ResolveSource(src)
 			}
-			resolved, err = bmo.ResolveSource(src)
 			if err != nil {
-				return err
+				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+				continue
 			}
 			cache[entry.Source] = resolved
 		}
@@ -1246,7 +1367,8 @@ func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string,
 			skill, err = bmo.ValidateSkill(skill.Path, name)
 		}
 		if err != nil {
-			return err
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+			continue
 		}
 		if !skillChanged(skill.Path, entry.InstalledPath) {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date\n", name)
@@ -1254,13 +1376,18 @@ func updateScope(cmd *cobra.Command, cwd string, scope bmo.Scope, args []string,
 		}
 		_, err = bmo.InstallSkill(bmo.InstallOptions{Scope: scope, Target: target, Name: name, Force: true, DryRun: opts.dryRun, CWD: cwd, Source: resolved.Source, Skill: skill})
 		if err != nil {
-			return err
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+			continue
 		}
 		if opts.dryRun {
 			fmt.Fprintf(cmd.OutOrStdout(), "Dry run: would update %s\n", name)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Updated %s\n", name)
 		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%d of %d skills could not be updated:\n  %s",
+			len(failures), len(names), strings.Join(failures, "\n  "))
 	}
 	return nil
 }

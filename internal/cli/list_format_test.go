@@ -54,7 +54,9 @@ func TestPrintSkillListGroupsAndFormats(t *testing.T) {
 	out := buf.String()
 
 	for _, want := range []string{
-		"Global", "Project",
+		// Neither entry records a harness, and pre-harness metadata has always
+		// meant Claude Code.
+		"Global (claude)", "Project (claude)",
 		".claude/skills",             // project dir shortened relative to cwd
 		"bmo (embedded)",             // embedded source labeled
 		"justin06lee/chrome.md@main", // resolved ref appended
@@ -73,6 +75,82 @@ func TestPrintSkillListGroupsAndFormats(t *testing.T) {
 	}
 	if strings.Index(out, "Global") > strings.Index(out, "Project") {
 		t.Errorf("expected global group before project group:\n%s", out)
+	}
+}
+
+func TestPrintSkillListHeaderNamesHarness(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	entries := []bmo.SkillMeta{
+		{
+			Name: "bmo", Scope: bmo.ScopeGlobal, Harness: bmo.HarnessCodex,
+			Source: "bmo", SourceType: string(bmo.SourceEmbedded),
+			InstalledPath: "/home/u/.agents/skills/bmo",
+			UpdatedAt:     "2026-08-06T11:00:00Z",
+		},
+		{
+			Name: "chrome", Scope: bmo.ScopeProject, Harness: bmo.HarnessCodex,
+			Source: "justin06lee/chrome.md", SourceType: string(bmo.SourceGitHub),
+			InstalledPath: "/proj/.agents/skills/chrome",
+			UpdatedAt:     "2026-08-06T11:00:00Z",
+		},
+	}
+	var buf bytes.Buffer
+	printSkillList(&buf, entries, "/proj", now)
+	out := buf.String()
+
+	if !strings.Contains(out, "Global (codex)") {
+		t.Errorf("expected global header to name the harness:\n%s", out)
+	}
+	if !strings.Contains(out, "Project (codex)  .agents/skills") {
+		t.Errorf("expected project header to keep the directory after the harness:\n%s", out)
+	}
+}
+
+func TestPrintSkillListMixedHarnessGroupListsAll(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	// Pre-harness metadata (empty) alongside an explicit codex entry: the
+	// header must name both instead of crediting the group to one of them.
+	codex := bmo.SkillMeta{
+		Name: "chrome", Scope: bmo.ScopeProject, Harness: bmo.HarnessCodex,
+		Source: "justin06lee/chrome.md", SourceType: string(bmo.SourceGitHub),
+		InstalledPath: "/proj/.agents/skills/chrome",
+		UpdatedAt:     "2026-08-06T11:00:00Z",
+	}
+	legacy := bmo.SkillMeta{
+		Name: "bmo", Scope: bmo.ScopeProject,
+		Source: "bmo", SourceType: string(bmo.SourceEmbedded),
+		InstalledPath: "/proj/.agents/skills/bmo",
+		UpdatedAt:     "2026-08-06T11:00:00Z",
+	}
+	// Both input orders must render the same label.
+	for _, entries := range [][]bmo.SkillMeta{{codex, legacy}, {legacy, codex}} {
+		var buf bytes.Buffer
+		printSkillList(&buf, entries, "/proj", now)
+		if out := buf.String(); !strings.Contains(out, "Project (claude, codex)") {
+			t.Errorf("expected both harnesses named in sorted order:\n%s", out)
+		}
+	}
+}
+
+func TestHarnessLabel(t *testing.T) {
+	cases := []struct {
+		name  string
+		group []bmo.SkillMeta
+		want  string
+	}{
+		{"explicit", []bmo.SkillMeta{{Harness: bmo.HarnessCursor}}, "cursor"},
+		{"empty means claude", []bmo.SkillMeta{{}}, "claude"},
+		{"duplicates collapse", []bmo.SkillMeta{{Harness: bmo.HarnessAmp}, {Harness: bmo.HarnessAmp}}, "amp"},
+		{
+			"mixed sorted",
+			[]bmo.SkillMeta{{Harness: bmo.HarnessGemini}, {Harness: bmo.HarnessCodex}, {}},
+			"claude, codex, gemini",
+		},
+	}
+	for _, c := range cases {
+		if got := harnessLabel(c.group); got != c.want {
+			t.Errorf("%s: harnessLabel = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
