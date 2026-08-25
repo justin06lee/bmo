@@ -256,7 +256,7 @@ func TestIgnoredAgentIsNotInstalled(t *testing.T) {
 		t.Fatalf("expected one tracked agent, got %v", meta.Agents)
 	}
 	// Doctor must not report the ignored agent as missing.
-	if warnings := doctorMessages(RunDoctor(cwd), DoctorWarning); len(warnings) > 0 {
+	if warnings := doctorMessages(runDoctorClaude(t, cwd), DoctorWarning); len(warnings) > 0 {
 		t.Fatalf("expected no warnings, got %v", warnings)
 	}
 }

@@ -49,7 +49,10 @@ func TestInstallRefusesOverwriteUnlessForce(t *testing.T) {
 	}
 }
 
-func TestDryRunReportsAlreadyInstalledConflict(t *testing.T) {
+// A dry run reports what would happen and writes nothing — including over an
+// existing install, where the real no-force command would fail. The CLI's
+// preview deliberately lets --dry-run through its own already-installed check.
+func TestDryRunOverExistingInstallReportsWithoutWriting(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude-test"))
@@ -61,12 +64,30 @@ func TestDryRunReportsAlreadyInstalledConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := InstallOptions{Scope: ScopeGlobal, Source: Source{Raw: "./demo", Type: SourceLocal}, Skill: skill, CWD: cwd}
-	if _, err := InstallSkill(opts); err != nil {
+	installed, err := InstallSkill(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(installed.InstalledPath, "SKILL.md"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	opts.DryRun = true
+	meta, err := InstallSkill(opts)
+	if err != nil {
+		t.Fatalf("dry run over an existing install must report, not fail: %v", err)
+	}
+	if meta.InstalledPath != installed.InstalledPath {
+		t.Fatalf("dry run reported the wrong destination: %q", meta.InstalledPath)
+	}
+	after, err := os.ReadFile(filepath.Join(installed.InstalledPath, "SKILL.md"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("dry run must not touch the installed copy: %v", err)
+	}
+	// The real command still refuses without --force and succeeds with it.
+	opts.DryRun = false
 	if _, err := InstallSkill(opts); err == nil {
-		t.Fatal("expected dry-run overwrite error")
+		t.Fatal("expected overwrite error without --force")
 	}
 	opts.Force = true
 	if _, err := InstallSkill(opts); err != nil {
@@ -89,12 +110,23 @@ func TestRemoveInstalledSkill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoveSkill("demo", ScopeGlobal, cwd); err != nil {
+	if _, err := removeSkillGlobal(t, "demo", cwd); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(meta.InstalledPath); !os.IsNotExist(err) {
 		t.Fatalf("expected removed path, got %v", err)
 	}
+}
+
+// removeSkillGlobal removes a skill from the default Claude global target, the
+// way the CLI resolves it.
+func removeSkillGlobal(t *testing.T, name, cwd string) (SkillMeta, error) {
+	t.Helper()
+	target, err := ResolveTarget("", ScopeGlobal, cwd, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return RemoveSkillFromTarget(name, target)
 }
 
 // A removal bmo refuses must change nothing: the guard used to run after the

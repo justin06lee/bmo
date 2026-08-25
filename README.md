@@ -187,7 +187,7 @@ Duplicate names are refused rather than resolved, since installing whichever fol
 | Zip URL | `https://example.com/skill.zip` |
 | The bundled bmo skill | `bmo` (or `self`) — installs the embedded skill, offline |
 
-The `github:` prefix is optional — a bare `owner/repo` is treated as GitHub. Local relative paths must use a `./` (or `../`) prefix so they aren't mistaken for a repo.
+The `github:` prefix is optional — a bare `owner/repo` is treated as GitHub. Local relative paths must use a `./` (or `../`) prefix so they aren't mistaken for a repo; absolute paths and `~/` paths (expanded by bmo even when quoted) work too.
 
 When no ref is specified, bmo tries `main` first, then falls back to `master`.
 
@@ -201,7 +201,7 @@ bmo add everywhere owner/repo everyone --all --yes
 bmo add here owner/repo everyone
 ```
 
-`everyone` detects harnesses whose CLI is on `PATH` or whose user configuration directory already exists. It preflights every destination, asks once, and installs only to detected harnesses. Destinations shared by multiple harnesses—such as the project-level `.agents/skills` used by Codex and Amp—are written once.
+`everyone` detects harnesses whose CLI is on `PATH` or whose user configuration directory already exists. It preflights every destination, asks once, and installs only to detected harnesses. Destinations shared by multiple harnesses—such as the project-level `.agents/skills` used by Codex and Amp—are written once. If a destination fails partway through, the copies already written are rolled back so a plain retry works without `--force`.
 
 ### `init`
 
@@ -311,7 +311,15 @@ Every project-scope install records its repo in a registry at
 turn (repos whose directory has vanished are skipped with a note; `bmo doctor`
 lists them). Repos installed into before the registry existed are backfilled
 the first time any `bmo update` runs inside them. Sources shared across repos
-are still downloaded only once per run.
+are still downloaded only once per run — and a source that fails to resolve is
+tried once, not once per skill.
+
+Unless a harness is named, the sweep covers **every built-in harness**: a
+project installed into with `bmo add src codex here` is updated by a plain
+`bmo update everywhere`, under a `(codex)` heading. Name a harness
+(`bmo update everywhere codex`) to narrow the sweep to it. One destination's
+failure never stops the sweep; everything that went wrong is reported at the
+end, after every reachable install has been updated.
 
 ### `doctor`
 
@@ -327,7 +335,12 @@ Checks:
 - Every tracked skill path exists and contains `SKILL.md`
 - No duplicate skill names across scopes
 - Harness-specific skill and metadata destinations
+- Metadata that tracks subagents a harness cannot host (the state `remove` refuses)
 - `CLAUDE_CONFIG_DIR` status when checking the Claude preset
+
+The `here` / `everywhere` keyword (or `--project` / `--global`) narrows the
+report to one scope. An unresolvable destination — say, no home directory — is
+reported as an `ERROR` line while every other diagnostic still runs.
 
 ---
 
@@ -351,7 +364,7 @@ Run `bmo harnesses` to print this table from the installed binary. The `codex` p
 
 Each distinct destination has its own metadata. Global non-Claude metadata lives at `~/.bmo/<harness>-skills.json`; project metadata lives beside that harness's `skills/` directory. Presets that intentionally share `.agents/skills` also share the physical project install—one copy serves every harness that discovers that directory.
 
-Portable/non-Claude installs enforce the common denominator of the Agent Skills format: `name` must be explicit, use lowercase letters/digits separated by single hyphens, and match the installed folder; `description` must be 1–1024 characters. The default Claude target retains its historical support for omitted names and `--name` overrides.
+Portable/non-Claude installs enforce the common denominator of the Agent Skills format: `name` must be explicit, use lowercase letters/digits separated by single hyphens, and match the installed folder; `description` must be 1–1024 characters. The default Claude target retains its historical support for omitted names, `--name` overrides, and legacy hyphen placement (a pre-existing `my--skill` keeps installing and updating there; `inspect` warns that such a name is not portable).
 
 ---
 
@@ -458,7 +471,9 @@ bmo update here                  # update this project's skills
 The keyword may appear before or after the other argument, so
 `bmo add here owner/repo` works too. Commands default to **global** when no
 keyword or flag is given (`bmo list` with neither still lists both scopes). The
-`--project` / `--global` flags continue to work and can be used interchangeably.
+`--project` / `--global` flags continue to work and can be used
+interchangeably; a contradictory pairing (`bmo list everywhere --project`) is
+rejected rather than silently resolved.
 
 One exception: on `update`, `everywhere` reaches further than the global scope —
 it also updates every registered project repo. See
@@ -480,13 +495,18 @@ bmo doctor codex                 # diagnose Codex's destinations
 `everyone` is only meaningful for `add`, which installs to every detected
 harness at once; the other commands act on one harness and reject it with an
 explanation. A positional harness cannot be combined with `--harness` or
-`--skills-dir`.
+`--skills-dir`. Positional names match case-insensitively, exactly like
+`--harness`.
 
 Because `remove` requires a skill name, a lone harness-shaped word there is read
 as the skill: `bmo remove codex` removes a skill *named* `codex`, while
-`bmo remove codex codex` removes it from the Codex harness. `update` has no
-required argument, so `bmo update codex` means "update everything tracked for
-Codex"; a skill named `codex` is covered by a plain `bmo update`.
+`bmo remove codex codex` removes it from the Codex harness. `add` treats its
+required source the same way: `bmo add codex` installs the local folder
+`./codex`, while `bmo add ./src codex` installs `./src` for Codex. This applies
+even to `everyone` — `bmo remove everyone` removes a skill *named* `everyone`.
+`update` has no required argument, so `bmo update codex` means "update
+everything tracked for Codex"; a skill named `codex` (or `everyone`) is covered
+by a plain `bmo update`.
 
 ---
 

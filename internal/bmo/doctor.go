@@ -21,39 +21,72 @@ type DoctorCheck struct {
 	Message string
 }
 
-func RunDoctor(cwd string) []DoctorCheck {
-	checks, err := RunDoctorForHarness(cwd, string(HarnessClaude))
-	if err != nil {
-		return []DoctorCheck{{DoctorError, err.Error()}}
-	}
-	return checks
-}
-
 // RunDoctorForHarness checks both global and project destinations for a
-// built-in harness.
+// built-in harness. Doctor exists to diagnose broken environments, so an
+// unresolvable destination (for example, no home directory) becomes an ERROR
+// check while every other diagnostic still runs.
 func RunDoctorForHarness(cwd, harnessName string) ([]DoctorCheck, error) {
+	harness, err := ParseHarness(harnessName)
+	if err != nil {
+		return nil, err
+	}
 	var checks []DoctorCheck
-	global, err := ResolveTarget(harnessName, ScopeGlobal, cwd, "")
-	if err != nil {
-		return nil, err
+	global, globalErr := ResolveTarget(string(harness), ScopeGlobal, cwd, "")
+	if globalErr != nil {
+		checks = append(checks, DoctorCheck{DoctorError, fmt.Sprintf("Global destination (%s): %v", harness, globalErr)})
+	} else {
+		checks = append(checks, scopeChecks("Global", global)...)
 	}
-	project, err := ResolveTarget(harnessName, ScopeProject, cwd, "")
-	if err != nil {
-		return nil, err
+	project, projectErr := ResolveTarget(string(harness), ScopeProject, cwd, "")
+	if projectErr != nil {
+		checks = append(checks, DoctorCheck{DoctorError, fmt.Sprintf("Project destination (%s): %v", harness, projectErr)})
+	} else {
+		checks = append(checks, scopeChecks("Project", project)...)
 	}
-	checks = append(checks, checkWritableDir("Global skills dir ("+string(global.Harness)+")", global.SkillsDir))
-	checks = append(checks, checkWritableDir("Project skills dir ("+string(project.Harness)+")", project.SkillsDir))
-	checks = append(checks, checkMetadata("Global metadata", global.MetadataPath))
-	checks = append(checks, checkMetadataEntries(global.MetadataPath)...)
-	checks = append(checks, checkMetadata("Project metadata", project.MetadataPath))
-	checks = append(checks, checkMetadataEntries(project.MetadataPath)...)
-	checks = append(checks, checkDuplicatesForTargets(global, project)...)
+	if globalErr == nil && projectErr == nil {
+		checks = append(checks, checkDuplicatesForTargets(global, project)...)
+	}
 	checks = append(checks, checkProjectRegistry()...)
-	checks = append(checks, checkAgentsForTargets(global, project)...)
-	if global.Harness == HarnessClaude && os.Getenv("CLAUDE_CONFIG_DIR") != "" {
+	if harness == HarnessClaude && os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 		checks = append(checks, DoctorCheck{DoctorOK, "CLAUDE_CONFIG_DIR is set"})
 	}
 	return checks, nil
+}
+
+// RunDoctorForHarnessScope checks a single scope of a built-in harness, for
+// `bmo doctor here` / `bmo doctor --project` style invocations.
+func RunDoctorForHarnessScope(cwd, harnessName string, scope Scope) ([]DoctorCheck, error) {
+	harness, err := ParseHarness(harnessName)
+	if err != nil {
+		return nil, err
+	}
+	label := "Project"
+	if scope == ScopeGlobal {
+		label = "Global"
+	}
+	target, resolveErr := ResolveTarget(string(harness), scope, cwd, "")
+	if resolveErr != nil {
+		return []DoctorCheck{{DoctorError, fmt.Sprintf("%s destination (%s): %v", label, harness, resolveErr)}}, nil
+	}
+	checks := scopeChecks(label, target)
+	if scope == ScopeGlobal {
+		checks = append(checks, checkProjectRegistry()...)
+	}
+	if harness == HarnessClaude && os.Getenv("CLAUDE_CONFIG_DIR") != "" {
+		checks = append(checks, DoctorCheck{DoctorOK, "CLAUDE_CONFIG_DIR is set"})
+	}
+	return checks, nil
+}
+
+// scopeChecks runs the per-destination diagnostics for one resolved target.
+func scopeChecks(label string, target Target) []DoctorCheck {
+	checks := []DoctorCheck{
+		checkWritableDir(label+" skills dir ("+string(target.Harness)+")", target.SkillsDir),
+		checkMetadata(label+" metadata", target.MetadataPath),
+	}
+	checks = append(checks, checkMetadataEntries(target.MetadataPath)...)
+	checks = append(checks, checkAgentsForTargets(target)...)
+	return checks
 }
 
 // RunDoctorForTarget checks one explicit destination, including custom skill
@@ -126,6 +159,9 @@ func checkAgentsForTargets(targets ...Target) []DoctorCheck {
 	var checks []DoctorCheck
 	for _, target := range targets {
 		if !target.SupportsAgents() {
+			// Metadata claiming subagents here is the state `bmo remove`
+			// refuses; surface it so doctor can diagnose that refusal.
+			checks = append(checks, checkOrphanedAgentMetadata(target)...)
 			continue
 		}
 		meta, err := ReadMetadata(target.MetadataPath)
@@ -156,6 +192,30 @@ func checkAgentsForTargets(targets ...Target) []DoctorCheck {
 			checks = append(checks, DoctorCheck{DoctorOK, fmt.Sprintf(
 				"%d installed subagents are present (%s scope): %s", installed, target.Scope, target.AgentsDir)})
 		}
+	}
+	return checks
+}
+
+// checkOrphanedAgentMetadata warns when a harness with no agent destination
+// nevertheless tracks subagent files — usually metadata written by hand or by
+// an older bmo. `bmo remove` refuses such entries, so the fix is named here.
+func checkOrphanedAgentMetadata(target Target) []DoctorCheck {
+	meta, err := ReadMetadata(target.MetadataPath)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(meta.Skills))
+	for name, entry := range meta.Skills {
+		if len(entry.Agents) > 0 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	var checks []DoctorCheck
+	for _, name := range names {
+		checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf(
+			"Skill %s tracks subagents but harness %s has no agent destination; edit %s to drop its agents list before removing",
+			name, target.Harness, target.MetadataPath)})
 	}
 	return checks
 }

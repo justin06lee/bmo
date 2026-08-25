@@ -7,6 +7,40 @@ import (
 	"testing"
 )
 
+// Doctor exists to diagnose broken environments, so it must degrade to an
+// ERROR check — not abort — when the home directory is unresolvable, and the
+// cwd-based project diagnostics must still run.
+func TestDoctorDegradesWithoutHomeDirectory(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	checks, err := RunDoctorForHarness(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("doctor must not abort on a broken environment: %v", err)
+	}
+	var globalError, projectChecked bool
+	for _, check := range checks {
+		if check.Status == DoctorError && strings.Contains(check.Message, "Global destination") {
+			globalError = true
+		}
+		if strings.Contains(check.Message, "Project skills dir") {
+			projectChecked = true
+		}
+	}
+	if !globalError || !projectChecked {
+		t.Fatalf("expected a global ERROR plus project diagnostics, got %+v", checks)
+	}
+}
+
+// runDoctorClaude runs the default-harness doctor the CLI uses.
+func runDoctorClaude(t *testing.T, cwd string) []DoctorCheck {
+	t.Helper()
+	checks, err := RunDoctorForHarness(cwd, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return checks
+}
+
 func TestDoctorDoesNotCreateMissingDirs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -17,7 +51,7 @@ func TestDoctorDoesNotCreateMissingDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectSkills := ProjectSkillsDir(cwd)
-	checks := RunDoctor(cwd)
+	checks := runDoctorClaude(t, cwd)
 	for _, dir := range []string{globalSkills, projectSkills} {
 		if _, err := os.Stat(dir); !os.IsNotExist(err) {
 			t.Fatalf("expected doctor not to create %s, got %v", dir, err)
@@ -47,7 +81,7 @@ func TestDoctorFindsBrokenMetadataEntry(t *testing.T) {
 	if err := WriteMetadata(metaPath, meta); err != nil {
 		t.Fatal(err)
 	}
-	checks := RunDoctor(t.TempDir())
+	checks := runDoctorClaude(t, t.TempDir())
 	var found bool
 	for _, check := range checks {
 		if check.Status == DoctorWarning && strings.Contains(check.Message, "broken") {

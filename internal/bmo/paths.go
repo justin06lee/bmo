@@ -45,7 +45,7 @@ func ProjectAgentsDir(cwd string) string {
 	return filepath.Join(cwd, ".claude", "agents")
 }
 
-// AgentsDir resolves the subagent directory for a scope, mirroring ScopePaths.
+// AgentsDir resolves the subagent directory for a scope.
 func AgentsDir(scope Scope, cwd string) (string, error) {
 	if scope == ScopeProject {
 		return ProjectAgentsDir(cwd), nil
@@ -80,16 +80,4 @@ func BootstrapMarkerPathFor(harness Harness) (string, error) {
 		name = ".bootstrapped"
 	}
 	return filepath.Join(home, ".bmo", name), nil
-}
-
-func ScopePaths(scope Scope, cwd string) (skillsDir string, metadataPath string, err error) {
-	if scope == ScopeProject {
-		return ProjectSkillsDir(cwd), ProjectMetadataPath(cwd), nil
-	}
-	skillsDir, err = GlobalSkillsDir()
-	if err != nil {
-		return "", "", err
-	}
-	metadataPath, err = GlobalMetadataPath()
-	return skillsDir, metadataPath, err
 }

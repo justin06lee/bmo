@@ -77,7 +77,11 @@ func TestSplitKeywords(t *testing.T) {
 		{name: "lone harness name is the required arg", args: []string{"codex"}, minArgs: 1, wantRest: []string{"codex"}},
 		{name: "lone harness name is a harness when nothing is required", args: []string{"codex"}, wantHarness: "codex"},
 		{name: "leftmost harness name fills the required arg", args: []string{"codex", "cursor"}, minArgs: 1, wantRest: []string{"codex"}, wantHarness: "cursor"},
-		{name: "everyone is never a skill name", args: []string{"everyone"}, minArgs: 1, wantHarness: "everyone"},
+		// A required positional wins even over "everyone", so a skill (or
+		// source folder) literally named everyone stays addressable.
+		{name: "everyone fills a starving required arg", args: []string{"everyone"}, minArgs: 1, wantRest: []string{"everyone"}},
+		{name: "everyone stays a keyword beside a real arg", args: []string{"demo", "everyone"}, minArgs: 1, wantRest: []string{"demo"}, wantHarness: "everyone"},
+		{name: "cased tokens match like --harness", args: []string{"demo", "Codex", "HERE"}, minArgs: 1, wantRest: []string{"demo"}, wantScope: "here", wantHarness: "codex"},
 		{name: "two locations is an error", args: []string{"here", "everywhere"}, wantErr: true},
 		{name: "two harnesses is an error", args: []string{"owner/repo", "codex", "gemini"}, wantErr: true},
 		{name: "two harnesses is an error even with one demoted", args: []string{"codex", "cursor", "amp"}, minArgs: 1, wantErr: true},
@@ -112,7 +116,6 @@ func TestSplitHarnessKeywordsRejectsEveryone(t *testing.T) {
 	}{
 		{"list-style command", []string{"everyone"}, 0},
 		{"remove-style command", []string{"demo", "everyone"}, 1},
-		{"everyone alone where a name is required", []string{"everyone"}, 1},
 		{"everyone beside a location", []string{"here", "everyone"}, 0},
 	}
 	for _, tc := range cases {
@@ -126,13 +129,18 @@ func TestSplitHarnessKeywordsRejectsEveryone(t *testing.T) {
 }
 
 func TestSplitAddKeywordsMatchesSplitKeywords(t *testing.T) {
-	// `bmo add` has one positional (the source), so no token is ever demoted.
-	for _, args := range [][]string{{"owner/repo", "codex"}, {"everyone"}, {"codex"}, {"here", "owner/repo"}} {
+	// `bmo add` requires the source, so harness-shaped tokens demote to it
+	// exactly like remove's skill name: `bmo add codex` installs ./codex.
+	for _, args := range [][]string{{"owner/repo", "codex"}, {"everyone"}, {"codex"}, {"here", "owner/repo"}, {"codex", "gemini"}} {
 		rest, scope, harness, err := splitAddKeywords(args)
-		wantRest, wantScope, wantHarness, wantErr := splitKeywords(args, 0)
+		wantRest, wantScope, wantHarness, wantErr := splitKeywords(args, 1)
 		if err != wantErr || scope != wantScope || harness != wantHarness || strings.Join(rest, ",") != strings.Join(wantRest, ",") {
 			t.Fatalf("splitAddKeywords(%v) = %v, %q, %q, %v", args, rest, scope, harness, err)
 		}
+	}
+	rest, _, harness, err := splitAddKeywords([]string{"codex"})
+	if err != nil || harness != "" || strings.Join(rest, ",") != "codex" {
+		t.Fatalf("splitAddKeywords([codex]) = %v, %q, %v; want the token kept as the source", rest, harness, err)
 	}
 }
 
@@ -256,6 +264,27 @@ func isolateHome(t *testing.T) string {
 	return home
 }
 
+// bootstrapForTest runs the first-run install exactly as PersistentPreRun does.
+func bootstrapForTest(cmd *cobra.Command) {
+	bootstrapBmoSkillForOptions(cmd, nil, &options{})
+}
+
+// bmoSkillTrackedGlobally reports whether global Claude metadata records the
+// bundled skill.
+func bmoSkillTrackedGlobally(t *testing.T) bool {
+	t.Helper()
+	metaPath, err := bmo.GlobalMetadataPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := bmo.ReadMetadata(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := meta.Skills[bmo.EmbeddedSkillName]
+	return ok
+}
+
 func TestBootstrapBmoSkillInstallsAndMarks(t *testing.T) {
 	home := isolateHome(t)
 
@@ -263,7 +292,7 @@ func TestBootstrapBmoSkillInstallsAndMarks(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd.SetErr(&stderr)
 
-	bootstrapBmoSkill(cmd)
+	bootstrapForTest(cmd)
 
 	marker := filepath.Join(home, ".bmo", ".bootstrapped")
 	if _, err := os.Stat(marker); err != nil {
@@ -275,7 +304,7 @@ func TestBootstrapBmoSkillInstallsAndMarks(t *testing.T) {
 		t.Fatalf("expected installed skill at %s: %v", installed, err)
 	}
 
-	if !bmoSkillTracked(home) {
+	if !bmoSkillTrackedGlobally(t) {
 		t.Fatalf("expected bmo skill to be tracked in metadata")
 	}
 
@@ -412,7 +441,8 @@ func TestHarnessAwareCommandsRejectBadArguments(t *testing.T) {
 		{"list rejects a stray argument", []string{"list", "bogus-arg"}, "unknown command"},
 		{"init rejects everyone", []string{"init", "everyone"}, "only supported by bmo add"},
 		{"list rejects everyone", []string{"list", "everyone"}, "only supported by bmo add"},
-		{"remove rejects everyone", []string{"remove", "everyone"}, "only supported by bmo add"},
+		// remove requires a name, so "everyone" is read as the skill to remove.
+		{"remove reads everyone as the skill name", []string{"remove", "everyone"}, "not tracked"},
 		{"update rejects everyone", []string{"update", "everyone"}, "only supported by bmo add"},
 		{"doctor rejects everyone", []string{"doctor", "everyone"}, "only supported by bmo add"},
 		{"positional harness beside --harness", []string{"init", "codex", "--harness", "gemini"}, "cannot be combined"},
@@ -443,8 +473,13 @@ func TestHarnessesCommandListsCodexAndCustomEscapeHatch(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "codex\t.agents/skills") || !strings.Contains(got, "bmo add SOURCE everyone") || !strings.Contains(got, "--skills-dir PATH") {
+	got := out.String()
+	if !strings.Contains(got, "codex") || !strings.Contains(got, ".agents/skills") || !strings.Contains(got, "bmo add SOURCE everyone") || !strings.Contains(got, "--skills-dir PATH") {
 		t.Fatalf("unexpected harness list:\n%s", got)
+	}
+	// The table is rendered through tabwriter, so no raw tabs survive.
+	if strings.Contains(got, "\t") {
+		t.Fatalf("expected an aligned table without raw tabs:\n%s", got)
 	}
 }
 
@@ -454,7 +489,7 @@ func TestBootstrapBmoSkillIdempotent(t *testing.T) {
 	first := &cobra.Command{Use: "list"}
 	var firstErr bytes.Buffer
 	first.SetErr(&firstErr)
-	bootstrapBmoSkill(first)
+	bootstrapForTest(first)
 	if firstErr.Len() == 0 {
 		t.Fatalf("expected first run to print a bootstrap message")
 	}
@@ -467,7 +502,7 @@ func TestBootstrapBmoSkillIdempotent(t *testing.T) {
 	second := &cobra.Command{Use: "list"}
 	var secondErr bytes.Buffer
 	second.SetErr(&secondErr)
-	bootstrapBmoSkill(second)
+	bootstrapForTest(second)
 
 	if secondErr.Len() != 0 {
 		t.Fatalf("expected second run to be a no-op, got stderr: %q", secondErr.String())
@@ -494,7 +529,7 @@ func TestBootstrapBmoSkillSkipsWhenTracked(t *testing.T) {
 	cmd := &cobra.Command{Use: "list"}
 	var stderr bytes.Buffer
 	cmd.SetErr(&stderr)
-	bootstrapBmoSkill(cmd)
+	bootstrapForTest(cmd)
 
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no install message when already tracked, got: %q", stderr.String())
@@ -539,10 +574,10 @@ func TestUpdateSkipsUnchangedAndUpdatesChanged(t *testing.T) {
 		out := &bytes.Buffer{}
 		cmd := &cobra.Command{}
 		cmd.SetOut(out)
-		cache := map[string]bmo.ResolvedSource{}
+		cache := map[string]sourceResolution{}
 		defer func() {
-			for _, resolved := range cache {
-				cleanupResolved(resolved)
+			for _, res := range cache {
+				cleanupResolved(res.resolved)
 			}
 		}()
 		if err := updateScope(cmd, cwd, bmo.ScopeGlobal, nil, &options{all: true}, cache); err != nil {
@@ -615,10 +650,10 @@ func TestUpdateEverywhereReachesRegisteredProjects(t *testing.T) {
 		out := &bytes.Buffer{}
 		cmd := &cobra.Command{}
 		cmd.SetOut(out)
-		cache := map[string]bmo.ResolvedSource{}
+		cache := map[string]sourceResolution{}
 		defer func() {
-			for _, resolved := range cache {
-				cleanupResolved(resolved)
+			for _, res := range cache {
+				cleanupResolved(res.resolved)
 			}
 		}()
 		if err := updateEverywhere(cmd, cwd, nil, &options{all: true}, cache); err != nil {
@@ -628,7 +663,7 @@ func TestUpdateEverywhereReachesRegisteredProjects(t *testing.T) {
 	}
 
 	out := runEverywhere()
-	if !strings.Contains(out, project+":") || !strings.Contains(out, "demo is up to date") {
+	if !strings.Contains(out, project+" (claude):") || !strings.Contains(out, "demo is up to date") {
 		t.Fatalf("expected registered project to be visited, got %q", out)
 	}
 
@@ -664,7 +699,7 @@ func TestUpdateEverywhereSkipsMissingProjects(t *testing.T) {
 	out := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(out)
-	if err := updateEverywhere(cmd, t.TempDir(), nil, &options{all: true}, map[string]bmo.ResolvedSource{}); err != nil {
+	if err := updateEverywhere(cmd, t.TempDir(), nil, &options{all: true}, map[string]sourceResolution{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Skipping "+gone) {

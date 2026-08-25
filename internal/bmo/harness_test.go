@@ -164,10 +164,18 @@ func TestSupportsAgentsMatchesMetadataAgentTracking(t *testing.T) {
 	for _, target := range []Target{
 		{Scope: ScopeGlobal, AgentsDir: agentsDir},
 		{Harness: HarnessClaude, Scope: ScopeGlobal, AgentsDir: agentsDir},
+		// Claude-shaped targets with no agent destination install nothing,
+		// so they must record nothing either.
+		{Scope: ScopeGlobal},
+		{Harness: HarnessClaude, Scope: ScopeGlobal},
+		{Harness: HarnessCodex, Scope: ScopeGlobal},
 	} {
 		meta := NewSkillMetaForTarget(skill, target, Source{}, "/tmp/demo", nil)
 		if len(meta.Agents) > 0 && !target.SupportsAgents() {
 			t.Fatalf("target %+v tracks agents it would never install", target)
+		}
+		if len(meta.Agents) == 0 && target.SupportsAgents() {
+			t.Fatalf("target %+v installs agents it never records", target)
 		}
 	}
 }

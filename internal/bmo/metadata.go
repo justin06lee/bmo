@@ -103,8 +103,10 @@ func NewSkillMetaForTarget(skill Skill, target Target, source Source, installedP
 	if existing != nil && existing.InstalledAt != "" {
 		installedAt = existing.InstalledAt
 	}
+	// Record agents exactly when the install writes them (SupportsAgents), so
+	// metadata never tracks subagents that were never installed.
 	var agents []string
-	if target.SupportsAgents() || target.Harness == "" || target.Harness == HarnessClaude {
+	if target.SupportsAgents() {
 		agents = AgentFiles(skill.Agents)
 	}
 	return SkillMeta{
