@@ -91,8 +91,9 @@ A bare `owner/repo` is treated as GitHub. When no ref is given, bmo tries the
 
 ### Scopes: `here` and `everywhere`
 
-`add`, `init`, `list`, `remove`, and `update` accept an optional location
-keyword as a plain positional word, before or after the other argument:
+`add`, `init`, `list`, `remove`, `update`, and `doctor` accept an optional
+location keyword as a plain positional word, before or after the other
+argument:
 
 - **`here`** — the selected harness's project skills directory
 - **`everywhere`** — the selected harness's global directory (the default)
@@ -104,7 +105,8 @@ bmo remove cool-skill here
 bmo update here               # update only this project's skills
 ```
 
-The `--project` / `--global` flags are equivalent. `bmo list` and `bmo update`
+The `--project` / `--global` flags are equivalent, and a contradictory pairing
+(`bmo list everywhere --project`) is rejected. `bmo list` and `bmo update`
 with no keyword or flag cover both scopes.
 
 Location and harness tokens can appear anywhere around the source, and flags
@@ -133,13 +135,17 @@ bmo doctor codex               # diagnose Codex's destinations
 ```
 
 `everyone` works only with `add`; the other commands act on a single harness
-and reject it with an explanation.
+and reject it with an explanation. Positional harness names match
+case-insensitively, like `--harness`.
 
-Two disambiguation rules matter when a skill is *named* like a harness:
-`bmo remove codex` removes the skill named `codex` (remove always needs a
-name), while `bmo remove codex codex` removes it from the Codex harness.
-`bmo update codex` means "update everything tracked for Codex", since update's
-name argument is optional.
+Two disambiguation rules matter when a skill or source is *named* like a
+harness: `bmo remove codex` removes the skill named `codex` (remove always
+needs a name), while `bmo remove codex codex` removes it from the Codex
+harness. `bmo add codex` likewise installs the local folder `./codex`, and
+`bmo remove everyone` removes a skill named `everyone`. `bmo update codex`
+means "update everything tracked for Codex", since update's name argument is
+optional; a skill named `codex` or `everyone` is covered by a plain
+`bmo update`.
 
 ### Updating
 
@@ -150,7 +156,9 @@ reports everything else as `up to date`. Use `--dry-run` to preview.
 `bmo update everywhere` goes further than the global scope: it also visits
 **every repo bmo has ever installed into** (each project-scope install records
 its repo in `~/.bmo/projects.json`) and updates their skills too — no need to
-cd into each repo. Vanished repos are skipped with a note.
+cd into each repo. Vanished repos are skipped with a note. Unless a harness is
+named, the sweep covers every built-in harness, so codex/gemini installs are
+updated by the plain command; one failure never stops the rest of the sweep.
 
 ### Installing a whole suite
 
@@ -226,9 +234,12 @@ Instructions for the coding agent go here.
   Write it as trigger guidance: when should an agent reach for this skill?
 - `name` is required for every portable/non-Claude target and must match the
   installed folder. It is optional only for backward-compatible Claude installs.
-  When present it must use lowercase letters and digits separated by single hyphens
-  and be at most 64 characters. It becomes the installed folder name and the
-  invocation name in harnesses that support explicit skill invocation.
+  Always write it as lowercase letters and digits separated by single hyphens,
+  at most 64 characters — portable targets enforce that grammar. The default
+  Claude target additionally tolerates legacy hyphen placement (`my--skill`)
+  for compatibility with old installs; `inspect` warns that such a name is not
+  portable. The name becomes the installed folder name and the invocation name
+  in harnesses that support explicit skill invocation.
 - If `name` is omitted, the folder name is used instead: lowercased, with
   every run of other characters collapsed to a single `-`. Prefer setting
   `name` explicitly.
@@ -332,8 +343,10 @@ subagents get installed, which folders count as skills, and the content hash
 - `SKILL.md` must exist at the skill folder's root and start with frontmatter.
 - The frontmatter must be valid YAML and closed with a `---` line.
 - `description` must be non-empty.
-- The resolved name must use lowercase letters and digits separated by single
-  hyphens (≤ 64 chars; no leading, trailing, or repeated hyphens).
+- The resolved name must use lowercase letters, digits, and hyphens (≤ 64
+  chars). Portable/non-Claude targets additionally reject leading, trailing,
+  or repeated hyphens — write single-hyphen names so the skill installs
+  everywhere.
 - **No symlinks anywhere in the tree** — the copy refuses them outright.
 - Every `agents/*.md` file must parse, carry a non-empty `description`, and
   resolve to a valid name. A malformed subagent fails the whole install rather

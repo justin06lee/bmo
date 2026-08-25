@@ -234,9 +234,10 @@ func (t Target) SupportsAgents() bool {
 }
 
 // ValidateSkillForTarget enforces the portable common denominator for every
-// non-Claude harness while retaining Claude's historical extensions.
+// non-Claude harness while retaining Claude's historical extensions. A
+// zero-value harness is Claude Code, matching the rest of this package.
 func ValidateSkillForTarget(skill Skill, target Target) error {
-	if target.Harness == HarnessClaude {
+	if target.Harness == HarnessClaude || target.Harness == "" {
 		return nil
 	}
 	if skill.DeclaredName == "" {
@@ -244,6 +245,9 @@ func ValidateSkillForTarget(skill Skill, target Target) error {
 	}
 	if skill.DeclaredName != skill.Name {
 		return fmt.Errorf("portable harnesses require the frontmatter name %q to match the installed folder %q", skill.DeclaredName, skill.Name)
+	}
+	if !PortableSkillNameRE.MatchString(skill.Name) {
+		return fmt.Errorf("portable harnesses require the skill name to use lowercase letters and digits separated by single hyphens: %q", skill.Name)
 	}
 	if utf8.RuneCountInString(skill.Description) > 1024 {
 		return errors.New("portable harnesses require the SKILL.md description to be 1024 characters or fewer")

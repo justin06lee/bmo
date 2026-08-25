@@ -181,7 +181,7 @@ func TestInstallRefusesForeignAgentWithoutForce(t *testing.T) {
 		t.Fatalf("expected a conflict error naming the agent, got %v", err)
 	}
 	// The skill must not be half-installed after a refused conflict.
-	skillsDir, _, err := ScopePaths(ScopeGlobal, cwd)
+	skillsDir, err := GlobalSkillsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestRemoveSkillRemovesItsAgents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentsDir, "unrelated.md"), []byte("keep me\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoveSkill("demo", ScopeGlobal, cwd); err != nil {
+	if _, err := removeSkillGlobal(t, "demo", cwd); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(agentsDir, "alpha.md")); !os.IsNotExist(err) {
@@ -348,7 +348,7 @@ func TestDoctorFlagsMissingAndDuplicateAgents(t *testing.T) {
 	if _, err := InstallSkill(InstallOptions{Scope: ScopeGlobal, Source: Source{Raw: "./demo", Type: SourceLocal}, Skill: skill, CWD: cwd}); err != nil {
 		t.Fatal(err)
 	}
-	if healthy := doctorMessages(RunDoctor(cwd), DoctorWarning); len(healthy) > 0 {
+	if healthy := doctorMessages(runDoctorClaude(t, cwd), DoctorWarning); len(healthy) > 0 {
 		t.Fatalf("expected no warnings for a clean install, got %v", healthy)
 	}
 	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
@@ -358,7 +358,7 @@ func TestDoctorFlagsMissingAndDuplicateAgents(t *testing.T) {
 	if err := os.Remove(filepath.Join(agentsDir, "alpha.md")); err != nil {
 		t.Fatal(err)
 	}
-	warnings := strings.Join(doctorMessages(RunDoctor(cwd), DoctorWarning), "\n")
+	warnings := strings.Join(doctorMessages(runDoctorClaude(t, cwd), DoctorWarning), "\n")
 	if !strings.Contains(warnings, "missing its installed subagent") {
 		t.Fatalf("expected a missing-subagent warning, got %v", warnings)
 	}
@@ -379,7 +379,7 @@ func TestDoctorFlagsMissingAndDuplicateAgents(t *testing.T) {
 	if err := WriteMetadata(metaPath, meta); err != nil {
 		t.Fatal(err)
 	}
-	warnings = strings.Join(doctorMessages(RunDoctor(cwd), DoctorWarning), "\n")
+	warnings = strings.Join(doctorMessages(runDoctorClaude(t, cwd), DoctorWarning), "\n")
 	if !strings.Contains(warnings, "claimed by more than one") {
 		t.Fatalf("expected a duplicate-subagent warning, got %v", warnings)
 	}

@@ -40,6 +40,11 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 			return SkillMeta{}, err
 		}
 	}
+	// A partially built target would copy the skill tree and then fail (or
+	// record nothing) at the metadata step, so refuse it before writing.
+	if target.MetadataPath == "" || target.Scope == "" {
+		return SkillMeta{}, errors.New("install target must carry a scope and metadata path; use ResolveTarget")
+	}
 	// Target is authoritative when supplied by a multi-harness caller.
 	opts.Scope = target.Scope
 	skillsDir, metadataPath := target.SkillsDir, target.MetadataPath
@@ -63,6 +68,12 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 		existing = &got
 	}
 	next := NewSkillMetaForTarget(skill, target, opts.Source, dest, existing)
+	// A dry run reports what would happen and writes nothing, so it returns
+	// before the conflict checks a real install would fail on — the CLI
+	// previews conflicts itself and deliberately lets --dry-run through.
+	if opts.DryRun {
+		return next, nil
+	}
 	_, destErr := os.Stat(dest)
 	if destErr == nil && !opts.Force {
 		return SkillMeta{}, fmt.Errorf("skill already installed: %s; use --force to replace it", skill.Name)
@@ -82,9 +93,6 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 				"subagent already exists and is not owned by %s: %s; use --force to replace it",
 				skill.Name, strings.Join(conflicts, ", "))
 		}
-	}
-	if opts.DryRun {
-		return next, nil
 	}
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return SkillMeta{}, err
@@ -129,7 +137,11 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 	// happens to share their name.
 	if existing != nil && target.SupportsAgents() {
 		if stale := staleAgents(existing.Agents, skill.Agents); len(stale) > 0 {
-			removeAgents(stale, agentsDir)
+			// The install itself succeeded, so a failed cleanup is reported
+			// rather than silently swallowed or turned into a fatal error.
+			if err := removeAgents(stale, agentsDir); err != nil {
+				fmt.Fprintf(os.Stderr, "bmo: warning: could not remove stale subagents of %s: %v\n", skill.Name, err)
+			}
 		}
 	}
 	if backup != "" {
@@ -185,14 +197,6 @@ func CheckInstallConflictsForTarget(skill Skill, target Target) (Conflict, error
 // Empty reports whether the install would overwrite nothing.
 func (c Conflict) Empty() bool {
 	return c.Path == "" && len(c.Agents) == 0
-}
-
-func RemoveSkill(name string, scope Scope, cwd string) (SkillMeta, error) {
-	target, err := ResolveTarget("", scope, cwd, "")
-	if err != nil {
-		return SkillMeta{}, err
-	}
-	return RemoveSkillFromTarget(name, target)
 }
 
 // RemoveSkillFromTarget removes a skill from one resolved harness destination.

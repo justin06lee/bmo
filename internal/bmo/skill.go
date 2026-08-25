@@ -38,7 +38,16 @@ type Frontmatter struct {
 	Description string `yaml:"description"`
 }
 
-var SkillNameRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+// SkillNameRE is the historical Claude-compatible name grammar. It is
+// deliberately lenient about hyphen placement so skills installed before the
+// portable presets existed keep validating (and updating). Portable targets
+// additionally enforce PortableSkillNameRE via ValidateSkillForTarget.
+var SkillNameRE = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// PortableSkillNameRE is the Agent Skills open-standard grammar: lowercase
+// letters and digits separated by single hyphens, with no leading or trailing
+// hyphen.
+var PortableSkillNameRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 var ignoredDirs = map[string]bool{
 	".git":         true,
@@ -143,6 +152,9 @@ func ValidateSkill(dir, nameOverride string) (Skill, error) {
 		return Skill{}, err
 	}
 	skill := Skill{Path: dir, Name: name, DeclaredName: fm.Name, Description: fm.Description}
+	if !PortableSkillNameRE.MatchString(name) {
+		skill.Warnings = append(skill.Warnings, "name uses legacy hyphen placement; portable harnesses require lowercase runs separated by single hyphens")
+	}
 	if utf8.RuneCountInString(fm.Description) > 1024 {
 		skill.Warnings = append(skill.Warnings, "description is longer than 1024 characters")
 	}
@@ -199,7 +211,7 @@ func ValidateSkillName(name string) error {
 		return errors.New("skill name must be 64 characters or fewer")
 	}
 	if !SkillNameRE.MatchString(name) {
-		return errors.New("skill name must use lowercase letters and digits separated by single hyphens")
+		return errors.New("skill name must use lowercase letters, digits, and hyphens")
 	}
 	return nil
 }

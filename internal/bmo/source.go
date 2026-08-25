@@ -131,7 +131,17 @@ func parseGitHubSource(raw string) (Source, error) {
 func ResolveSource(src Source) (ResolvedSource, error) {
 	switch src.Type {
 	case SourceLocal:
-		abs, err := filepath.Abs(src.LocalDir)
+		dir := src.LocalDir
+		// The shell normally expands ~, but a quoted "~/skill" reaches bmo
+		// verbatim and would otherwise resolve to a literal ~ under cwd.
+		if dir == "~" || strings.HasPrefix(dir, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return ResolvedSource{}, fmt.Errorf("cannot expand ~ in %s: %w", src.LocalDir, err)
+			}
+			dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+		}
+		abs, err := filepath.Abs(dir)
 		if err != nil {
 			return ResolvedSource{}, err
 		}

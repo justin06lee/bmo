@@ -54,6 +54,30 @@ func TestParseRelativePathStaysLocal(t *testing.T) {
 	}
 }
 
+// A quoted "~/skill" reaches bmo unexpanded by the shell; resolution expands
+// it to the home directory instead of a literal ~ under cwd.
+func TestResolveSourceExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "tilde-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src, err := ParseSource("~/tilde-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.Type != SourceLocal {
+		t.Fatalf("expected local source, got %+v", src)
+	}
+	resolved, err := ResolveSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, "tilde-skill"); resolved.Root != want {
+		t.Fatalf("resolved root = %q, want %q", resolved.Root, want)
+	}
+}
+
 func TestParseZipURL(t *testing.T) {
 	src, err := ParseSource("https://example.com/skill.zip")
 	if err != nil {
