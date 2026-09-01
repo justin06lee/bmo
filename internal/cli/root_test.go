@@ -83,7 +83,11 @@ func TestSplitKeywords(t *testing.T) {
 		{name: "everyone fills a starving required arg", args: []string{"everyone"}, minArgs: 1, wantRest: []string{"everyone"}},
 		{name: "everyone stays a keyword beside a real arg", args: []string{"demo", "everyone"}, minArgs: 1, wantRest: []string{"demo"}, wantHarness: "everyone"},
 		{name: "cased tokens match like --harness", args: []string{"demo", "Codex", "HERE"}, minArgs: 1, wantRest: []string{"demo"}, wantScope: "here", wantHarness: "codex"},
+		{name: "universe is a location keyword", args: []string{"demo", "universe"}, minArgs: 1, wantRest: []string{"demo"}, wantScope: "universe"},
+		{name: "universe matches case-insensitively", args: []string{"demo", "UNIVERSE"}, minArgs: 1, wantRest: []string{"demo"}, wantScope: "universe"},
+		{name: "universe beside a harness", args: []string{"demo", "universe", "codex"}, minArgs: 1, wantRest: []string{"demo"}, wantScope: "universe", wantHarness: "codex"},
 		{name: "two locations is an error", args: []string{"here", "everywhere"}, wantErr: true},
+		{name: "universe beside another location is an error", args: []string{"universe", "everywhere"}, wantErr: true},
 		{name: "two harnesses is an error", args: []string{"owner/repo", "codex", "gemini"}, wantErr: true},
 		{name: "two harnesses is an error even with one demoted", args: []string{"codex", "cursor", "amp"}, minArgs: 1, wantErr: true},
 	}

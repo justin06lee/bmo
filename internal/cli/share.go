@@ -69,7 +69,7 @@ type sharePlan struct {
 
 func newShareCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "share [here|everywhere] [everyone|HARNESS]",
+		Use:   "share [here|everywhere|universe] [everyone|HARNESS]",
 		Short: "Give every harness the same set of skills",
 		Long: `Sync bmo-tracked skills across coding harnesses so each one ends up with the
 union of what all of them have.
@@ -86,7 +86,7 @@ harness untouched.
 Copies are made from the installed skill folder, not re-downloaded, but each
 copy keeps the donor's recorded source so ` + "`bmo update`" + ` still tracks the real
 upstream. Use ` + "`bmo scout`" + ` first so ` + "`bmo share everywhere`" + ` knows about every
-project.`,
+project — ` + "`universe`" + ` is a synonym for that reach.`,
 		Example: `  bmo share
   bmo share everywhere everyone
   bmo share here
@@ -111,7 +111,8 @@ project.`,
 			if err := keywordScopeConflict(keyword, opts); err != nil {
 				return err
 			}
-			locations, missing, err := sweepLocations(cwd, keyword, opts)
+			// share's "everywhere" has always meant the machine-wide sweep.
+			locations, missing, err := sweepLocations(cwd, sweepEverything(keyword), opts)
 			if err != nil {
 				return err
 			}

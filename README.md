@@ -145,7 +145,7 @@ bmo update everywhere everyone
 # Give every harness the same set of skills (purely additive, nothing replaced)
 bmo share everyone
 
-# Remove a skill (add `everywhere` to delete every copy on the machine)
+# Remove a skill (add `universe` to delete every copy on the machine)
 bmo remove skill-name
 
 # Run diagnostics
@@ -269,7 +269,7 @@ By default (no flags), lists both global and project skills.
 Uninstall a skill.
 
 ```bash
-bmo remove SKILL_NAME [here|everywhere] [HARNESS|everyone] [--project | --global] [--harness NAME | --skills-dir PATH] [--yes]
+bmo remove SKILL_NAME [here|everywhere|universe] [HARNESS|everyone] [--project | --global] [--harness NAME | --skills-dir PATH] [--yes]
 ```
 
 | Flag | Description |
@@ -282,17 +282,20 @@ bmo remove SKILL_NAME [here|everywhere] [HARNESS|everyone] [--project | --global
 
 Removes the skill directory from disk and its entry from the metadata file. Any subagents the skill installed are deleted too — only the exact files bmo recorded, so hand-written subagents sharing the directory are left alone.
 
-#### `bmo remove everywhere`: every copy at once
+#### `bmo remove universe`: every copy at once
 
-Like `update`, `remove` reads `everywhere` as a sweep rather than "the global
-scope": it deletes **every copy the registry can reach** — the global install
-plus every project bmo has installed into, across every harness.
+`here` and `everywhere` name one destination each — this project, or the global
+skills directory. `universe` is the sweep: it deletes **every copy the registry
+can reach**, the global install plus every project bmo has installed into,
+across every harness. `everyone` widens whichever location was named across
+every harness without reaching any further.
 
 ```bash
-bmo remove cool-skill everywhere        # every copy, everywhere
-bmo remove cool-skill everywhere codex  # every copy, Codex only
-bmo remove cool-skill everyone          # every harness, this directory's destinations
-bmo remove cool-skill here everyone     # every harness, this project only
+bmo remove cool-skill universe            # every copy on the machine
+bmo remove cool-skill universe codex      # every copy, Codex only
+bmo remove cool-skill everywhere everyone # every harness's global install
+bmo remove cool-skill everyone            # every harness, this directory's destinations
+bmo remove cool-skill here everyone       # every harness, this project only
 ```
 
 Every copy is listed with its real path and confirmed once before anything is
@@ -308,8 +311,9 @@ sweep deletes the copy that is really inside the harness's skills directory,
 and untracks entries whose files are already gone — without ever deleting
 outside the resolved skills directory.
 
-The registry only knows the repos bmo installed into *on this machine*; run
-[`bmo scout`](#scout) first if a sweep misses one.
+`universe` names neither scope, so it cannot be combined with `--project`,
+`--global`, or `--skills-dir`. The registry only knows the repos bmo installed
+into *on this machine*; run [`bmo scout`](#scout) first if a sweep misses one.
 
 ### `update`
 
@@ -347,6 +351,7 @@ On `update`, the `everywhere` keyword means more than "global scope": it walks
 
 ```bash
 bmo update everywhere              # global skills + every registered repo
+bmo update universe                # the same sweep, in the CLI's newer wording
 bmo update cool-skill everywhere   # one skill, wherever it is tracked
 ```
 
@@ -390,7 +395,7 @@ reports one heading rather than eight failures.
 ### `scout`
 
 Find the projects bmo has installed skills into, and record them so
-`bmo remove everywhere`, `bmo update everywhere`, and `bmo share everywhere` can
+`bmo remove universe`, `bmo update everywhere`, and `bmo share everywhere` can
 reach them.
 
 ```bash
@@ -442,7 +447,7 @@ reason `bmo update everywhere` refuses that flag.
 Give every harness the same set of skills.
 
 ```bash
-bmo share [here|everywhere] [everyone|HARNESS] [--project | --global] [--yes] [--dry-run]
+bmo share [here|everywhere|universe] [everyone|HARNESS] [--project | --global] [--yes] [--dry-run]
 ```
 
 | Flag | Description |
@@ -623,7 +628,7 @@ The rules apply to every walk: which files are copied, which subagents are insta
 
 `.bmoignore` is read from the skill root only — nested ignore files have no effect — and the file itself is installed, so the skill on disk documents what was left out.
 
-### Picking a scope: `here` / `everywhere`
+### Picking a scope: `here` / `everywhere` / `universe`
 
 `add`, `init`, `list`, `remove`, `update`, `share`, and `doctor` take an optional
 location keyword as a plain positional word — a friendlier alias for the
@@ -633,15 +638,21 @@ location keyword as a plain positional word — a friendlier alias for the
 |---------|---------|-----------------|
 | `here` | the current harness's project skills directory | `--project` |
 | `everywhere` | globally (the default) | `--global` |
+| `universe` | globally **plus every project in the registry** | — |
 
 ```bash
 bmo add owner/repo here          # install into this project
 bmo add owner/repo everywhere    # install globally (same as the default)
 bmo list here                    # list only this project's skills
 bmo remove cool-skill here       # remove from this project
-bmo remove cool-skill everywhere # remove every copy bmo can reach
+bmo remove cool-skill everywhere # remove the global install
+bmo remove cool-skill universe   # remove every copy bmo can reach
 bmo update here                  # update this project's skills
 ```
+
+`universe` is only meaningful for the commands that act on installs bmo already
+tracked — `remove`, `update`, and `share`. The rest resolve a single destination
+to write to or read from, and reject it with an explanation.
 
 The keyword may appear before or after the other argument, so
 `bmo add here owner/repo` works too. Commands default to **global** when no
@@ -650,9 +661,10 @@ keyword or flag is given (`bmo list` with neither still lists both scopes). The
 interchangeably; a contradictory pairing (`bmo list everywhere --project`) is
 rejected rather than silently resolved.
 
-One exception: on `remove`, `update`, and `share`, `everywhere` reaches further
-than the global scope — it also visits every registered project repo. See
-[`bmo remove everywhere`](#bmo-remove-everywhere-every-copy-at-once) and
+One exception: on `update` and `share`, which predate the `universe` keyword,
+`everywhere` reaches further than the global scope — it also visits every
+registered project repo, and `universe` is a synonym there. See
+[`bmo remove universe`](#bmo-remove-universe-every-copy-at-once) and
 [`bmo update everywhere`](#bmo-update-everywhere-every-repo-at-once).
 
 ### Naming a harness positionally
