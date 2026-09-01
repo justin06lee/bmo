@@ -42,6 +42,7 @@ bmo update everywhere everyone # every skill, every harness, every known project
 bmo scout             # find projects bmo installed into, record them for later
 bmo share everyone    # give every harness the union of everyone's skills
 bmo remove NAME       # uninstall a skill
+bmo remove NAME everywhere # delete every copy, every harness, every known project
 bmo doctor            # run diagnostics
 bmo init              # (re)install this bundled bmo skill
 bmo harnesses         # list supported harness presets and paths
@@ -107,13 +108,16 @@ other argument:
 - **`here`** — the selected harness's project skills directory
 - **`everywhere`** — the selected harness's global directory (the default)
 
-On `update` and `share`, which sweep rather than install, `everywhere` means
-more: the global destinations **plus every project in the registry**.
+On `remove`, `update`, and `share`, which sweep rather than install,
+`everywhere` means more: the global destinations **plus every project in the
+registry**, across every harness unless one is named. `bmo remove NAME
+everywhere` is how you delete every copy of a skill in one command.
 
 ```bash
 bmo add owner/repo here       # install into this project
 bmo list here                 # only this project's skills
 bmo remove cool-skill here
+bmo remove cool-skill everywhere  # every copy bmo can reach
 bmo update here               # update only this project's skills
 ```
 
@@ -147,8 +151,8 @@ bmo doctor codex               # diagnose Codex's destinations
 bmo share codex                # seed every other harness from Codex
 ```
 
-`everyone` works with `add`, `update`, and `share` — the commands that fan out
-across harnesses. `init`, `list`, `remove`, and `doctor` act on a single
+`everyone` works with `add`, `remove`, `update`, and `share` — the commands
+that fan out across harnesses. `init`, `list`, and `doctor` act on a single
 harness and reject it with an explanation. Positional harness names match
 case-insensitively, like `--harness`.
 
@@ -189,6 +193,36 @@ If `update everywhere` misses a repo, the registry has not seen it — run
 `bmo scout` (below). That is the normal case after cloning a repo whose skills
 were committed, or on a new machine.
 
+### Removing
+
+`bmo remove NAME` uninstalls from one destination: it deletes the skill folder,
+the subagent files bmo recorded for it, and its metadata entry — nothing else.
+
+`bmo remove NAME everywhere` is the sweep. It deletes every copy the registry
+can reach: the global install plus every project bmo has installed into, across
+every harness, in one run.
+
+```bash
+bmo remove cool-skill everywhere       # every copy, everywhere
+bmo remove cool-skill everywhere codex # every copy, Codex only
+bmo remove cool-skill everyone         # every harness, this directory's destinations
+bmo remove cool-skill here everyone    # every harness, this project only
+```
+
+Every copy is listed and confirmed once before anything is deleted, so a sweep
+is safe to run just to see what is out there (answer `n`, or pass `--yes` to
+skip the prompt). Locations that never had the skill are not an error — only a
+sweep that finds no copy at all fails. One destination bmo cannot clean up
+never strands the others: the rest are removed and the refusal is reported at
+the end.
+
+A project that moved after installation records a path that no longer exists.
+The sweep deletes the copy that is really inside the harness's skills
+directory, and untracks entries whose files are already gone. Nothing outside
+the resolved skills directory is ever deleted.
+
+If a sweep misses a repo, the registry has not seen it — run `bmo scout` first.
+
 ### Finding installs: `bmo scout`
 
 ```bash
@@ -197,8 +231,8 @@ bmo scout [PATH] [--depth N] [--hidden] [--prune] [--dry-run] [--json]
 
 Walks every directory below `PATH` (the current directory by default), finds
 the projects holding a bmo lock file that tracks skills, and records them in
-`~/.bmo/projects.json` so `bmo update everywhere` and `bmo share everywhere`
-can reach them.
+`~/.bmo/projects.json` so `bmo remove everywhere`, `bmo update everywhere`, and
+`bmo share everywhere` can reach them.
 
 It never installs, moves, or deletes a skill — the only file it writes is the
 project registry. `--dry-run` previews without writing even that.
@@ -277,7 +311,7 @@ subpath, or install the odd one out separately with `--name`.
 - `--dry-run` — show what would happen without writing anything; suppresses first-run bootstrap writes
 - `--json` — machine-readable output (on `list`)
 - positional `HARNESS` on `add` — use a built-in coding-harness preset
-- positional `everyone` on `add`, `update`, `share` — fan out across harnesses
+- positional `everyone` on `add`, `remove`, `update`, `share` — fan out across harnesses
 - `--depth`, `--hidden`, `--prune` (on `scout`) — bound or tidy a sweep
 - `--harness NAME` — compatibility alias and target selector on other commands
 - `--skills-dir PATH` — use an exact skills directory for any other harness

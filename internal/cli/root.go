@@ -692,79 +692,6 @@ func newListCommand(opts *options) *cobra.Command {
 	return cmd
 }
 
-func newRemoveCommand(opts *options) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "remove SKILL_NAME [here|everywhere] [HARNESS]",
-		Short: "Remove an installed skill",
-		Example: `  bmo remove demo here
-  bmo remove demo codex`,
-		Args: argsWithKeywords(cobra.ExactArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cwd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			args, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
-			if err != nil {
-				return err
-			}
-			effective, err := withPositionalHarness(opts, positionalHarness)
-			if err != nil {
-				return err
-			}
-			if err := keywordScopeConflict(keyword, effective); err != nil {
-				return err
-			}
-			scope := keywordScope(keyword, effective)
-			target, err := targetFor(scope, cwd, effective)
-			if err != nil {
-				return err
-			}
-			meta, err := bmo.ReadMetadata(target.MetadataPath)
-			if err != nil {
-				return err
-			}
-			entry, ok := meta.Skills[args[0]]
-			if !ok {
-				return fmt.Errorf("skill is not tracked by bmo in %s scope: %s\nTry: bmo list, or bmo doctor", scope, args[0])
-			}
-			// The same refusal RemoveSkillFromTarget would raise, surfaced
-			// before the preview so the user is not prompted to confirm a
-			// removal that cannot happen (and the preview never renders an
-			// empty subagent destination).
-			if len(entry.Agents) > 0 && !target.SupportsAgents() {
-				return fmt.Errorf("metadata tracks subagents but harness %s has no compatible agent destination; see bmo doctor", target.Harness)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Remove %s from %s\n", entry.Name, entry.InstalledPath)
-			if len(entry.Agents) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "Also removes %d subagents from %s: %s\n",
-					len(entry.Agents), target.AgentsDir, strings.Join(entry.Agents, ", "))
-			}
-			if !effective.yes {
-				ok, err := confirm(cmd, "Remove? [y/N] ")
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return errors.New("remove cancelled")
-				}
-			}
-			removed, err := bmo.RemoveSkillFromTarget(args[0], target)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", removed.Name)
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&opts.project, "project", false, "Use project metadata")
-	cmd.Flags().BoolVar(&opts.global, "global", false, "Use global metadata")
-	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
-	addHarnessFlags(cmd, opts)
-	cmd.MarkFlagsMutuallyExclusive("project", "global")
-	return cmd
-}
-
 func newUpdateCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update [SKILL_NAME] [here|everywhere] [HARNESS|everyone]",
@@ -1018,17 +945,17 @@ func splitHarnessKeywords(args []string, minArgs int) (rest []string, scopeKeywo
 		return nil, "", "", err
 	}
 	if harnessKeyword == everyoneKeyword {
-		return nil, "", "", errors.New(`"everyone" fans out across harnesses and is only supported by bmo add, bmo update, and bmo share; run this command per harness instead (a skill literally named everyone is covered by the command's no-name form, e.g. a plain bmo list)`)
+		return nil, "", "", errors.New(`"everyone" fans out across harnesses and is only supported by bmo add, bmo remove, bmo update, and bmo share; run this command per harness instead (a skill literally named everyone is covered by the command's no-name form, e.g. a plain bmo list)`)
 	}
 	return rest, scopeKeyword, harnessKeyword, nil
 }
 
 // fansOutAcrossHarnesses reports whether "everyone" is meaningful for a
-// command: add installs into every detected harness, while update and share
-// sweep every harness's destinations at once.
+// command: add installs into every detected harness, while remove, update, and
+// share sweep every harness's destinations at once.
 func fansOutAcrossHarnesses(name string) bool {
 	switch name {
-	case "add", "update", "share":
+	case "add", "remove", "update", "share":
 		return true
 	}
 	return false
@@ -1504,17 +1431,8 @@ func updateEverywhere(cmd *cobra.Command, cwd string, args []string, opts *optio
 		return errors.New("update everywhere cannot discover arbitrary --skills-dir locations; choose --project or --global")
 	}
 	harnessNames := everywhereHarnesses(opts)
-	// Backfill: repos installed into before the registry existed register the
-	// first time an update runs inside them, whichever harness they used.
-	for _, hname := range harnessNames {
-		project, err := bmo.ResolveTarget(hname, bmo.ScopeProject, cwd, "")
-		if err != nil {
-			return err
-		}
-		if hasTrackedSkills(project.MetadataPath) {
-			_ = bmo.RecordProject(cwd)
-			break
-		}
+	if err := recordCurrentProject(cwd, harnessNames); err != nil {
+		return err
 	}
 	locations, missing, err := sweepLocations(cwd, "everywhere", opts)
 	if err != nil {
@@ -1559,6 +1477,25 @@ func everywhereHarnesses(opts *options) []string {
 		names = append(names, string(harness))
 	}
 	return names
+}
+
+// recordCurrentProject backfills the registry from the current directory:
+// repos installed into before the registry existed register the first time an
+// "everywhere" sweep runs inside them, whichever harness they used. Failing to
+// write the registry is not worth failing the sweep over — the destinations
+// the sweep already resolved are unaffected.
+func recordCurrentProject(cwd string, harnessNames []string) error {
+	for _, hname := range harnessNames {
+		project, err := bmo.ResolveTarget(hname, bmo.ScopeProject, cwd, "")
+		if err != nil {
+			return err
+		}
+		if hasTrackedSkills(project.MetadataPath) {
+			_ = bmo.RecordProject(cwd)
+			return nil
+		}
+	}
+	return nil
 }
 
 // hasTrackedSkills reports whether the metadata file at path tracks anything.
