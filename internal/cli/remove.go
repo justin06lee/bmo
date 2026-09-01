@@ -12,22 +12,26 @@ import (
 
 func newRemoveCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "remove SKILL_NAME [here|everywhere] [HARNESS|everyone]",
+		Use:   "remove SKILL_NAME [here|everywhere|universe] [HARNESS|everyone]",
 		Short: "Remove an installed skill",
 		Long: `Uninstall a skill: its directory, the subagent files bmo recorded for it, and
 its metadata entry.
 
-` + "`everywhere`" + ` makes remove a sweep rather than one destination — the skill is
-deleted from the global install and from every project in the registry, for
-every harness, in a single run. ` + "`everyone`" + ` is the narrower fan-out: every
-harness, but only where the current directory reaches. Naming a harness limits
-either sweep to that harness.
+` + "`here`" + ` and ` + "`everywhere`" + ` name one destination each, as they do everywhere else
+in the CLI: this project, or the global skills directory.
 
-Run ` + "`bmo scout`" + ` first so ` + "`bmo remove everywhere`" + ` knows about projects bmo has
+` + "`universe`" + ` makes remove a sweep instead — the skill is deleted from the global
+install and from every project in the registry, for every harness, in a single
+run. ` + "`everyone`" + ` widens whichever location was named across every harness, so
+` + "`bmo remove NAME everywhere everyone`" + ` clears every harness's global install and
+nothing else. Naming a harness limits a sweep to that harness.
+
+Run ` + "`bmo scout`" + ` first so ` + "`bmo remove universe`" + ` knows about projects bmo has
 not installed into itself.`,
 		Example: `  bmo remove demo here
   bmo remove demo codex
-  bmo remove demo everywhere`,
+  bmo remove demo universe
+  bmo remove demo everywhere everyone`,
 		Args: argsWithKeywords(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
@@ -54,7 +58,7 @@ not installed into itself.`,
 			if err := keywordScopeConflict(keyword, effective); err != nil {
 				return err
 			}
-			if keyword == "everywhere" || everyone {
+			if keyword == universeKeyword || everyone {
 				return removeSweep(cmd, cwd, args[0], keyword, effective)
 			}
 			return removeOne(cmd, cwd, args[0], keyword, effective)
@@ -82,7 +86,7 @@ func removeOne(cmd *cobra.Command, cwd, name, keyword string, opts *options) err
 	}
 	entry, ok := meta.Skills[name]
 	if !ok {
-		return fmt.Errorf("skill is not tracked by bmo in %s scope: %s\nTry: bmo remove %s everywhere, bmo list, or bmo doctor", scope, name, name)
+		return fmt.Errorf("skill is not tracked by bmo in %s scope: %s\nTry: bmo remove %s universe, bmo list, or bmo doctor", scope, name, name)
 	}
 	// The same refusal RemoveSkillFromTarget would raise, surfaced
 	// before the preview so the user is not prompted to confirm a
@@ -143,21 +147,22 @@ type removal struct {
 	reason string
 }
 
-// removeSweep deletes every copy of one skill the sweep can reach. Unlike the
-// single-destination form it is not an error for a location to lack the skill:
-// "remove it everywhere" is about the end state, so the destinations that
-// never had it are simply not visited. Only a sweep that finds no copy at all
-// fails.
+// removeSweep deletes every copy of one skill the sweep can reach: the whole
+// machine under "universe", or every harness at the location "everyone" was
+// paired with. Unlike the single-destination form it is not an error for a
+// location to lack the skill — a sweep is about the end state, so destinations
+// that never had it are simply not visited. Only a sweep that finds no copy at
+// all fails.
 //
 // One destination's refusal must not strand the others, so blocked copies are
 // reported up front — before the confirmation, so nobody approves a removal
 // that cannot happen — and again as the aggregated error at the end.
 func removeSweep(cmd *cobra.Command, cwd, name, keyword string, opts *options) error {
 	if opts.skillsDir != "" {
-		return errors.New("a sweeping remove cannot discover arbitrary --skills-dir locations; drop the location keyword to remove from that one directory")
+		return errors.New("a sweeping remove resolves its own destinations and cannot discover arbitrary --skills-dir locations; drop \"universe\"/\"everyone\" to remove from that one directory")
 	}
 	harnesses := everywhereHarnesses(opts)
-	if keyword == "everywhere" {
+	if keyword == universeKeyword {
 		// Backfill: a repo installed into before the registry existed
 		// registers the first time a sweep runs inside it.
 		if err := recordCurrentProject(cwd, harnesses); err != nil {
@@ -312,15 +317,18 @@ func blockedError(name string, blocked []removal) error {
 		name, len(blocked), plural(len(blocked), "destination", "destinations"), strings.Join(reasons, "\n  "))
 }
 
-// sweepWhere names a sweep's reach for its "nothing tracked" message, matching
-// the wording update uses for the same sweeps.
+// sweepWhere names a sweep's reach for its "nothing tracked" message, so the
+// refusal describes the ground actually covered rather than a scope the user
+// never named.
 func sweepWhere(keyword string, opts *options) string {
 	switch {
-	case keyword == "everywhere":
+	case keyword == universeKeyword:
 		return "anywhere"
-	case keyword == "" && !opts.project && !opts.global:
-		return "in any harness for this directory"
-	default:
+	case keyword == "everywhere" || opts.global:
+		return "in any harness globally"
+	case keyword == "here" || opts.project:
 		return "in any harness here"
+	default:
+		return "in any harness for this directory"
 	}
 }

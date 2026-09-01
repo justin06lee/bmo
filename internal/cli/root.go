@@ -694,7 +694,7 @@ func newListCommand(opts *options) *cobra.Command {
 
 func newUpdateCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "update [SKILL_NAME] [here|everywhere] [HARNESS|everyone]",
+		Use:   "update [SKILL_NAME] [here|everywhere|universe] [HARNESS|everyone]",
 		Short: "Update installed skills whose source content changed",
 		Example: `  bmo update demo here
   bmo update codex
@@ -742,7 +742,9 @@ func newUpdateCommand(opts *options) *cobra.Command {
 			}()
 			// On update, "everywhere" reaches past the current directory:
 			// global skills plus every project bmo has ever installed into.
-			if keyword == "everywhere" {
+			// "universe" is the same sweep, spelled the way the rest of the
+			// CLI names that reach.
+			if keyword == "everywhere" || keyword == universeKeyword {
 				return updateEverywhere(cmd, cwd, args, effective, cache)
 			}
 			if everyone {
@@ -875,9 +877,49 @@ func selectedScope(opts *options) bmo.Scope {
 }
 
 // everyoneKeyword fans a command out across harnesses: add installs into every
-// detected one, update sweeps every one's destinations, and share syncs between
-// them. The commands that resolve a single destination reject it.
+// detected one, remove and update sweep every one's destinations, and share
+// syncs between them. The commands that resolve a single destination reject it.
 const everyoneKeyword = "everyone"
+
+// universeKeyword is the widest reach bmo has: the global destinations plus
+// every project in the registry, so `bmo remove universe NAME` deletes every
+// copy on the machine without visiting a single repo. Only the commands that
+// act on installs bmo already tracked can use it; the ones that resolve a
+// single destination to write to reject it.
+//
+// `update` and `share` predate the word and spell the same sweep
+// "everywhere", which is why sweepEverything exists.
+const universeKeyword = "universe"
+
+// sweepEverything canonicalizes the keyword update and share use for the
+// machine-wide sweep. Their "everywhere" has always reached past the global
+// scope, and changing that under people who type it daily would be worse than
+// carrying the synonym. `remove` keeps "everywhere" meaning the global
+// destinations it means everywhere else in the CLI.
+func sweepEverything(keyword string) string {
+	if keyword == "everywhere" {
+		return universeKeyword
+	}
+	return keyword
+}
+
+// sweepsTheUniverse reports whether "universe" is meaningful for a command.
+// remove, update, and share act on installs that already exist and can visit
+// every one of them; every other command resolves a single destination to
+// write to or read from, where "the whole machine" names nothing.
+func sweepsTheUniverse(name string) bool {
+	switch name {
+	case "remove", "update", "share":
+		return true
+	}
+	return false
+}
+
+// universeUnsupported explains the refusal, and points at the keyword that
+// does name a destination the command can use.
+func universeUnsupported() error {
+	return errors.New(`"universe" reaches every project bmo has installed into and is only supported by bmo remove, bmo update, and bmo share; use "everywhere" for the global destination or "here" for this project`)
+}
 
 // splitKeywords pulls the optional location keyword ("here" / "everywhere") and
 // an optional harness token out of a command's positional args, returning what
@@ -900,17 +942,16 @@ func splitKeywords(args []string, minArgs int) (rest []string, scopeKeyword, har
 	// Counted up front so the outcome does not depend on argument order.
 	demotable := minArgs
 	for _, arg := range args {
-		lower := strings.ToLower(arg)
-		if lower != "here" && lower != "everywhere" && !harnessNames[lower] {
+		if !locationKeyword(arg) && !harnessNames[strings.ToLower(arg)] {
 			demotable--
 		}
 	}
 	for _, arg := range args {
 		lower := strings.ToLower(arg)
 		switch {
-		case lower == "here" || lower == "everywhere":
+		case locationKeyword(arg):
 			if scopeKeyword != "" {
-				return nil, "", "", errors.New("specify only one location keyword (here or everywhere)")
+				return nil, "", "", errors.New("specify only one location keyword (here, everywhere, or universe)")
 			}
 			scopeKeyword = lower
 		case harnessNames[lower] && demotable <= 0:
@@ -928,12 +969,29 @@ func splitKeywords(args []string, minArgs int) (rest []string, scopeKeyword, har
 	return rest, scopeKeyword, harnessKeyword, nil
 }
 
+// locationKeyword reports whether an argument names one of the three reaches a
+// command can be pointed at, matched case-insensitively like --harness.
+func locationKeyword(arg string) bool {
+	switch strings.ToLower(arg) {
+	case "here", "everywhere", universeKeyword:
+		return true
+	}
+	return false
+}
+
 // splitAddKeywords extracts the keywords accepted by `bmo add`. The source is
 // a required positional and may itself be a local folder named after a
 // harness (`bmo add codex` installs ./codex), so harness-shaped tokens are
 // demoted to it exactly like remove's skill name.
 func splitAddKeywords(args []string) (rest []string, scopeKeyword, harnessKeyword string, err error) {
-	return splitKeywords(args, 1)
+	rest, scopeKeyword, harnessKeyword, err = splitKeywords(args, 1)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if scopeKeyword == universeKeyword {
+		return nil, "", "", universeUnsupported()
+	}
+	return rest, scopeKeyword, harnessKeyword, nil
 }
 
 // splitHarnessKeywords is splitKeywords for the harness-aware commands that
@@ -966,9 +1024,17 @@ func fansOutAcrossHarnesses(name string) bool {
 // disagree about which tokens are keywords.
 func splitCommandKeywords(cmd *cobra.Command, args []string) (rest []string, scopeKeyword, harnessKeyword string, err error) {
 	if fansOutAcrossHarnesses(cmd.Name()) {
-		return splitKeywords(args, minPositionalArgs(cmd))
+		rest, scopeKeyword, harnessKeyword, err = splitKeywords(args, minPositionalArgs(cmd))
+	} else {
+		rest, scopeKeyword, harnessKeyword, err = splitHarnessKeywords(args, minPositionalArgs(cmd))
 	}
-	return splitHarnessKeywords(args, minPositionalArgs(cmd))
+	if err != nil {
+		return nil, "", "", err
+	}
+	if scopeKeyword == universeKeyword && !sweepsTheUniverse(cmd.Name()) {
+		return nil, "", "", universeUnsupported()
+	}
+	return rest, scopeKeyword, harnessKeyword, nil
 }
 
 // minPositionalArgs reports how many positional args a harness-aware command
@@ -1007,6 +1073,9 @@ func keywordScopeConflict(keyword string, opts *options) error {
 	}
 	if keyword == "everywhere" && opts.project {
 		return errors.New(`"everywhere" cannot be combined with --project`)
+	}
+	if keyword == universeKeyword && (opts.project || opts.global) {
+		return errors.New(`"universe" covers the global destinations and every registered project; drop --project and --global`)
 	}
 	return nil
 }
@@ -1307,19 +1376,25 @@ type sweepLocation struct {
 	label string
 }
 
-// sweepLocations resolves where a multi-place command works, shared by update
-// and share so the two cannot drift apart on what a location keyword means.
+// sweepLocations resolves where a multi-place command works, shared by remove,
+// update, and share so the three cannot drift apart on what a location keyword
+// means.
 //
-// "everywhere" reaches past the current directory: the global destinations
-// plus every project bmo has installed into. "here" is this project alone,
-// and with no keyword a sweep covers the two destinations the current
-// directory resolves to. Registered projects that have since been deleted are
-// returned separately so the caller can report them rather than fail.
+// "universe" reaches past the current directory: the global destinations plus
+// every project bmo has installed into. "everywhere" is the global
+// destinations, "here" is this project alone, and with no keyword a sweep
+// covers the two destinations the current directory resolves to. Registered
+// projects that have since been deleted are returned separately so the caller
+// can report them rather than fail.
+//
+// Callers pass the canonical keyword: update and share, whose "everywhere" has
+// always meant the machine-wide sweep, translate it with sweepEverything
+// first.
 func sweepLocations(cwd, keyword string, opts *options) (locations []sweepLocation, missing []string, err error) {
 	global := sweepLocation{dir: cwd, scope: bmo.ScopeGlobal, label: "Global"}
 	project := sweepLocation{dir: cwd, scope: bmo.ScopeProject, label: cwd}
 	switch {
-	case keyword == "everywhere":
+	case keyword == universeKeyword:
 		locations = []sweepLocation{global}
 		projects, err := bmo.RegisteredProjects()
 		if err != nil {
@@ -1335,9 +1410,9 @@ func sweepLocations(cwd, keyword string, opts *options) (locations []sweepLocati
 		return locations, missing, nil
 	case keyword == "here" || opts.project:
 		return []sweepLocation{project}, nil, nil
-	case opts.global:
+	case keyword == "everywhere" || opts.global:
 		// --global stays the single global destination it has always been;
-		// only the "everywhere" keyword reaches into registered projects.
+		// only "universe" reaches into registered projects.
 		return []sweepLocation{global}, nil, nil
 	default:
 		return []sweepLocation{global, project}, nil, nil
@@ -1421,20 +1496,20 @@ func updateSweep(cmd *cobra.Command, req updateSweepRequest) error {
 }
 
 // updateEverywhere updates the global scope plus every project recorded in
-// the registry, so `bmo update everywhere` reaches repos without being run
-// inside them. With a skill name, only the places tracking that skill run.
+// the registry, so `bmo update everywhere` (or `universe`) reaches repos
+// without being run inside them. With a skill name, only the places tracking that skill run.
 // Unless a harness is named, every built-in preset is swept: project installs
 // bmo registered for codex, gemini, and friends must not go silently stale
 // just because the default harness is Claude.
 func updateEverywhere(cmd *cobra.Command, cwd string, args []string, opts *options, cache map[string]sourceResolution) error {
 	if opts.skillsDir != "" {
-		return errors.New("update everywhere cannot discover arbitrary --skills-dir locations; choose --project or --global")
+		return errors.New("a machine-wide update cannot discover arbitrary --skills-dir locations; choose --project or --global")
 	}
 	harnessNames := everywhereHarnesses(opts)
 	if err := recordCurrentProject(cwd, harnessNames); err != nil {
 		return err
 	}
-	locations, missing, err := sweepLocations(cwd, "everywhere", opts)
+	locations, missing, err := sweepLocations(cwd, universeKeyword, opts)
 	if err != nil {
 		return err
 	}

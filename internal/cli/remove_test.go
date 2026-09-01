@@ -47,7 +47,7 @@ func onlyRegisterProjects(t *testing.T, dirs ...string) {
 
 // The widest removal bmo performs: every harness, in every project the
 // registry knows, from a directory that is none of them.
-func TestRemoveEverywhereSweepsEveryHarnessAndProject(t *testing.T) {
+func TestRemoveUniverseSweepsEveryHarnessAndProject(t *testing.T) {
 	home := isolateHome(t)
 	claudeProject := t.TempDir()
 	codexProject := t.TempDir()
@@ -63,9 +63,9 @@ func TestRemoveEverywhereSweepsEveryHarnessAndProject(t *testing.T) {
 		t.Fatalf("global install failed: %v\n%s", err, out)
 	}
 
-	out, err := runBmo(t, home, "remove", "demo", "everywhere", "--yes")
+	out, err := runBmo(t, home, "remove", "demo", "universe", "--yes")
 	if err != nil {
-		t.Fatalf("bmo remove demo everywhere: %v\n%s", err, out)
+		t.Fatalf("bmo remove demo universe: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "Global (claude)") ||
 		!strings.Contains(out, claudeProject+" (claude)") ||
@@ -91,7 +91,7 @@ func TestRemoveEverywhereSweepsEveryHarnessAndProject(t *testing.T) {
 
 // The sweep must reach a project it has never been run inside, and must not
 // fail just because some locations do not have the skill.
-func TestRemoveEverywhereReachesRegisteredProjectsOnly(t *testing.T) {
+func TestRemoveUniverseReachesRegisteredProjectsOnly(t *testing.T) {
 	home := isolateHome(t)
 	project := t.TempDir()
 	installIntoProject(t, project, "claude", "alpha")
@@ -100,9 +100,9 @@ func TestRemoveEverywhereReachesRegisteredProjectsOnly(t *testing.T) {
 	onlyRegisterProjects(t, project)
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "alpha", "everywhere", "--yes")
+	out, err := runBmo(t, home, "remove", "alpha", "universe", "--yes")
 	if err != nil {
-		t.Fatalf("bmo remove alpha everywhere: %v\n%s", err, out)
+		t.Fatalf("bmo remove alpha universe: %v\n%s", err, out)
 	}
 	if installedSkillExists(t, project, "claude", "alpha", bmo.ScopeProject) {
 		t.Fatalf("registered project copy survived:\n%s", out)
@@ -116,7 +116,7 @@ func TestRemoveEverywhereReachesRegisteredProjectsOnly(t *testing.T) {
 }
 
 // Registered directories that no longer exist are reported, not fatal.
-func TestRemoveEverywhereSkipsMissingProjects(t *testing.T) {
+func TestRemoveUniverseSkipsMissingProjects(t *testing.T) {
 	home := isolateHome(t)
 	project := t.TempDir()
 	installIntoProject(t, project, "claude", "alpha")
@@ -132,9 +132,9 @@ func TestRemoveEverywhereSkipsMissingProjects(t *testing.T) {
 	}
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "alpha", "everywhere", "--yes")
+	out, err := runBmo(t, home, "remove", "alpha", "universe", "--yes")
 	if err != nil {
-		t.Fatalf("bmo remove alpha everywhere: %v\n%s", err, out)
+		t.Fatalf("bmo remove alpha universe: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "Skipping "+gone) {
 		t.Fatalf("expected the missing project to be noted:\n%s", out)
@@ -167,39 +167,39 @@ func TestRemoveEveryoneStaysWithThisDirectory(t *testing.T) {
 
 // A sweep that finds nothing says so in the language of its reach, rather
 // than blaming one scope the user never named.
-func TestRemoveEverywhereReportsNothingTracked(t *testing.T) {
+func TestRemoveUniverseReportsNothingTracked(t *testing.T) {
 	home := isolateHome(t)
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "ghost", "everywhere", "--yes")
+	out, err := runBmo(t, home, "remove", "ghost", "universe", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "not tracked by bmo anywhere: ghost") {
-		t.Fatalf("bmo remove ghost everywhere error = %v, want an anywhere-scoped refusal\n%s", err, out)
+		t.Fatalf("bmo remove ghost universe error = %v, want an anywhere-scoped refusal\n%s", err, out)
 	}
 }
 
 // The single-destination refusal points at the sweep that would have found it.
-func TestRemoveOneSuggestsEverywhere(t *testing.T) {
+func TestRemoveOneSuggestsTheUniverseSweep(t *testing.T) {
 	home := isolateHome(t)
 	project := t.TempDir()
 	installIntoProject(t, project, "claude", "alpha")
 	t.Chdir(t.TempDir())
 
 	out, err := runBmo(t, home, "remove", "alpha", "--yes")
-	if err == nil || !strings.Contains(err.Error(), "bmo remove alpha everywhere") {
-		t.Fatalf("bmo remove alpha error = %v, want a pointer to the sweep\n%s", err, out)
+	if err == nil || !strings.Contains(err.Error(), "bmo remove alpha universe") {
+		t.Fatalf("bmo remove alpha error = %v, want a pointer to the universe sweep\n%s", err, out)
 	}
 }
 
 // Declining the confirmation must leave every copy in place.
-func TestRemoveEverywhereCancelKeepsEveryCopy(t *testing.T) {
+func TestRemoveUniverseCancelKeepsEveryCopy(t *testing.T) {
 	home := isolateHome(t)
 	project := t.TempDir()
 	installIntoProject(t, project, "claude", "demo")
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "demo", "everywhere")
+	out, err := runBmo(t, home, "remove", "demo", "universe")
 	if err == nil || !strings.Contains(err.Error(), "remove cancelled") {
-		t.Fatalf("bmo remove demo everywhere error = %v, want the cancellation\n%s", err, out)
+		t.Fatalf("bmo remove demo universe error = %v, want the cancellation\n%s", err, out)
 	}
 	if !strings.Contains(out, "Remove demo from 1 place:") {
 		t.Fatalf("expected the preview to name the destination:\n%s", out)
@@ -211,7 +211,7 @@ func TestRemoveEverywhereCancelKeepsEveryCopy(t *testing.T) {
 
 // One destination bmo cannot clean up must not strand the rest: the others are
 // removed and the refusal is reported.
-func TestRemoveEverywhereContinuesPastABlockedDestination(t *testing.T) {
+func TestRemoveUniverseContinuesPastABlockedDestination(t *testing.T) {
 	home := isolateHome(t)
 	project := t.TempDir()
 	installIntoProject(t, project, "claude", "demo")
@@ -235,9 +235,9 @@ func TestRemoveEverywhereContinuesPastABlockedDestination(t *testing.T) {
 	}
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "demo", "everywhere", "--yes")
+	out, err := runBmo(t, home, "remove", "demo", "universe", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "could not be removed from 1 destination") {
-		t.Fatalf("bmo remove demo everywhere error = %v, want the blocked destination reported\n%s", err, out)
+		t.Fatalf("bmo remove demo universe error = %v, want the blocked destination reported\n%s", err, out)
 	}
 	if !strings.Contains(out, "Cannot remove from "+blocked+" (codex):") {
 		t.Fatalf("expected the refusal before the preview:\n%s", out)
@@ -252,13 +252,13 @@ func TestRemoveEverywhereContinuesPastABlockedDestination(t *testing.T) {
 
 // A sweep resolves its own destinations, so an explicit directory cannot join
 // one; the refusal has to say which form to use instead.
-func TestRemoveEverywhereRejectsSkillsDir(t *testing.T) {
+func TestRemoveUniverseRejectsSkillsDir(t *testing.T) {
 	home := isolateHome(t)
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "demo", "everywhere", "--skills-dir", "sk", "--yes")
+	out, err := runBmo(t, home, "remove", "demo", "universe", "--skills-dir", "sk", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "cannot discover arbitrary --skills-dir locations") {
-		t.Fatalf("bmo remove demo everywhere --skills-dir error = %v, want a refusal\n%s", err, out)
+		t.Fatalf("bmo remove demo universe --skills-dir error = %v, want a refusal\n%s", err, out)
 	}
 }
 
@@ -277,16 +277,16 @@ func TestRemoveEveryoneRejectsASingleDestination(t *testing.T) {
 }
 
 // Naming a harness narrows the sweep to it rather than widening to all.
-func TestRemoveEverywhereHonorsANamedHarness(t *testing.T) {
+func TestRemoveUniverseHonorsANamedHarness(t *testing.T) {
 	home := isolateHome(t)
 	project := t.TempDir()
 	installIntoProject(t, project, "claude", "demo")
 	installIntoProject(t, project, "codex", "demo")
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "demo", "everywhere", "codex", "--yes")
+	out, err := runBmo(t, home, "remove", "demo", "universe", "codex", "--yes")
 	if err != nil {
-		t.Fatalf("bmo remove demo everywhere codex: %v\n%s", err, out)
+		t.Fatalf("bmo remove demo universe codex: %v\n%s", err, out)
 	}
 	if installedSkillExists(t, project, "codex", "demo", bmo.ScopeProject) {
 		t.Fatalf("the codex copy survived:\n%s", out)
@@ -299,7 +299,7 @@ func TestRemoveEverywhereHonorsANamedHarness(t *testing.T) {
 // The case a real machine hits: a repo that was moved after installation, so
 // its metadata records a path that no longer exists. The sweep must still
 // clear the copy that is really there.
-func TestRemoveEverywhereClearsARelocatedProject(t *testing.T) {
+func TestRemoveUniverseClearsARelocatedProject(t *testing.T) {
 	home := isolateHome(t)
 	parent := t.TempDir()
 	before := filepath.Join(parent, "before")
@@ -317,9 +317,9 @@ func TestRemoveEverywhereClearsARelocatedProject(t *testing.T) {
 	onlyRegisterProjects(t, after)
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "demo", "everywhere", "--yes")
+	out, err := runBmo(t, home, "remove", "demo", "universe", "--yes")
 	if err != nil {
-		t.Fatalf("bmo remove demo everywhere: %v\n%s", err, out)
+		t.Fatalf("bmo remove demo universe: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, filepath.Join(after, ".claude", "skills", "demo")) {
 		t.Fatalf("expected the preview to name the copy that is really there:\n%s", out)
@@ -334,7 +334,7 @@ func TestRemoveEverywhereClearsARelocatedProject(t *testing.T) {
 
 // Files deleted by hand leave an entry that is the only thing still calling
 // the skill installed. The sweep clears it, and says what it actually did.
-func TestRemoveEverywhereUntracksAnEntryWithNoFilesLeft(t *testing.T) {
+func TestRemoveUniverseUntracksAnEntryWithNoFilesLeft(t *testing.T) {
 	home := isolateHome(t)
 	project := t.TempDir()
 	installIntoProject(t, project, "claude", "demo")
@@ -343,9 +343,9 @@ func TestRemoveEverywhereUntracksAnEntryWithNoFilesLeft(t *testing.T) {
 	}
 	t.Chdir(t.TempDir())
 
-	out, err := runBmo(t, home, "remove", "demo", "everywhere", "--yes")
+	out, err := runBmo(t, home, "remove", "demo", "universe", "--yes")
 	if err != nil {
-		t.Fatalf("bmo remove demo everywhere: %v\n%s", err, out)
+		t.Fatalf("bmo remove demo universe: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "untracks the entry only") ||
 		!strings.Contains(out, "Untracked 1 stale entry of demo.") {
@@ -356,5 +356,142 @@ func TestRemoveEverywhereUntracksAnEntryWithNoFilesLeft(t *testing.T) {
 	}
 	if installedSkillExists(t, project, "claude", "demo", bmo.ScopeProject) {
 		t.Fatalf("the stale entry survived:\n%s", out)
+	}
+}
+
+// installGlobally installs a skill into one harness's global destination.
+func installGlobally(t *testing.T, harness, name string) {
+	t.Helper()
+	source := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: " + name + "\ndescription: The " + name + " skill.\n---\n# " + name + "\n"
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target, err := bmo.ResolveTarget(harness, bmo.ScopeGlobal, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := bmo.ParseSource(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err := bmo.ValidateSkill(source, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bmo.InstallSkill(bmo.InstallOptions{Target: target, CWD: t.TempDir(), Source: src, Skill: skill}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// `everywhere` names the global skills directory here exactly as it does on
+// every other command — the machine-wide sweep is `universe`.
+func TestRemoveEverywhereStaysGlobal(t *testing.T) {
+	home := isolateHome(t)
+	installGlobally(t, "claude", "demo")
+	project := t.TempDir()
+	installIntoProject(t, project, "claude", "demo")
+	t.Chdir(t.TempDir())
+
+	out, err := runBmo(t, home, "remove", "demo", "everywhere", "--yes")
+	if err != nil {
+		t.Fatalf("bmo remove demo everywhere: %v\n%s", err, out)
+	}
+	if installedSkillExists(t, t.TempDir(), "claude", "demo", bmo.ScopeGlobal) {
+		t.Fatalf("the global copy survived:\n%s", out)
+	}
+	if !installedSkillExists(t, project, "claude", "demo", bmo.ScopeProject) {
+		t.Fatalf("everywhere must not reach registered projects:\n%s", out)
+	}
+	if strings.Contains(out, project) {
+		t.Fatalf("everywhere must not even visit a project:\n%s", out)
+	}
+}
+
+// `everywhere everyone` is the fan-out that stays global: every harness's
+// global install, and nothing in any project.
+func TestRemoveEverywhereEveryoneCoversEveryHarnessGlobally(t *testing.T) {
+	home := isolateHome(t)
+	installGlobally(t, "claude", "demo")
+	installGlobally(t, "codex", "demo")
+	project := t.TempDir()
+	installIntoProject(t, project, "claude", "demo")
+	t.Chdir(t.TempDir())
+
+	out, err := runBmo(t, home, "remove", "demo", "everywhere", "everyone", "--yes")
+	if err != nil {
+		t.Fatalf("bmo remove demo everywhere everyone: %v\n%s", err, out)
+	}
+	if installedSkillExists(t, t.TempDir(), "claude", "demo", bmo.ScopeGlobal) ||
+		installedSkillExists(t, t.TempDir(), "codex", "demo", bmo.ScopeGlobal) {
+		t.Fatalf("expected both harnesses' global installs to be cleared:\n%s", out)
+	}
+	if !installedSkillExists(t, project, "claude", "demo", bmo.ScopeProject) {
+		t.Fatalf("a global fan-out must leave projects alone:\n%s", out)
+	}
+	if !strings.Contains(out, "Removed 2 copies of demo.") {
+		t.Fatalf("expected the two global copies to be reported:\n%s", out)
+	}
+}
+
+// The commands that resolve one destination to write to or read from cannot
+// mean "the whole machine", and say which keyword to use instead.
+func TestUniverseRejectedBySingleDestinationCommands(t *testing.T) {
+	for _, args := range [][]string{
+		{"list", "universe"},
+		{"init", "universe"},
+		{"doctor", "universe"},
+		{"add", "universe", "owner/repo"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			home := isolateHome(t)
+			t.Chdir(t.TempDir())
+			out, err := runBmo(t, home, args...)
+			if err == nil || !strings.Contains(err.Error(), "only supported by bmo remove, bmo update, and bmo share") {
+				t.Fatalf("bmo %s error = %v, want the universe refusal\n%s", strings.Join(args, " "), err, out)
+			}
+		})
+	}
+}
+
+// `universe` is neither scope, so pairing it with one is a contradiction
+// rather than something to silently resolve.
+func TestUniverseRejectsScopeFlags(t *testing.T) {
+	for _, flag := range []string{"--project", "--global"} {
+		t.Run(flag, func(t *testing.T) {
+			home := isolateHome(t)
+			t.Chdir(t.TempDir())
+			out, err := runBmo(t, home, "remove", "demo", "universe", flag, "--yes")
+			if err == nil || !strings.Contains(err.Error(), "drop --project and --global") {
+				t.Fatalf("bmo remove demo universe %s error = %v, want a refusal\n%s", flag, err, out)
+			}
+		})
+	}
+}
+
+// update and share keep reading `everywhere` as the machine-wide sweep they
+// have always meant by it, and accept `universe` for the same reach.
+func TestUpdateAndShareAcceptUniverse(t *testing.T) {
+	home := isolateHome(t)
+	project := t.TempDir()
+	installIntoProject(t, project, "codex", "demo")
+	t.Chdir(t.TempDir())
+
+	out, err := runBmo(t, home, "update", "universe")
+	if err != nil {
+		t.Fatalf("bmo update universe: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, project+" (codex):") {
+		t.Fatalf("expected update universe to visit the registered project:\n%s", out)
+	}
+	out, err = runBmo(t, home, "share", "universe", "--yes")
+	if err != nil {
+		t.Fatalf("bmo share universe: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, project) {
+		t.Fatalf("expected share universe to visit the registered project:\n%s", out)
 	}
 }
