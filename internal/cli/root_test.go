@@ -122,7 +122,7 @@ func TestSplitHarnessKeywordsRejectsEveryone(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, _, err := splitHarnessKeywords(tc.args, tc.minArgs)
-			if err == nil || !strings.Contains(err.Error(), "only supported by bmo add") {
+			if err == nil || !strings.Contains(err.Error(), "bmo add, bmo update, and bmo share") {
 				t.Fatalf("splitHarnessKeywords(%v, %d) error = %v, want the everyone explanation", tc.args, tc.minArgs, err)
 			}
 		})
@@ -496,12 +496,13 @@ func TestHarnessAwareCommandsRejectBadArguments(t *testing.T) {
 	}{
 		{"doctor rejects a stray argument", []string{"doctor", "bogus-arg"}, "unknown command"},
 		{"list rejects a stray argument", []string{"list", "bogus-arg"}, "unknown command"},
-		{"init rejects everyone", []string{"init", "everyone"}, "only supported by bmo add"},
-		{"list rejects everyone", []string{"list", "everyone"}, "only supported by bmo add"},
+		{"init rejects everyone", []string{"init", "everyone"}, "bmo add, bmo update, and bmo share"},
+		{"list rejects everyone", []string{"list", "everyone"}, "bmo add, bmo update, and bmo share"},
 		// remove requires a name, so "everyone" is read as the skill to remove.
 		{"remove reads everyone as the skill name", []string{"remove", "everyone"}, "not tracked"},
-		{"update rejects everyone", []string{"update", "everyone"}, "only supported by bmo add"},
-		{"doctor rejects everyone", []string{"doctor", "everyone"}, "only supported by bmo add"},
+		{"doctor rejects everyone", []string{"doctor", "everyone"}, "bmo add, bmo update, and bmo share"},
+		{"update everyone rejects --harness", []string{"update", "everyone", "--harness", "codex"}, "already covers every harness"},
+		{"share everyone rejects --harness", []string{"share", "everyone", "--harness", "codex"}, "already covers every harness"},
 		{"positional harness beside --harness", []string{"init", "codex", "--harness", "gemini"}, "cannot be combined"},
 		{"positional harness beside --skills-dir", []string{"list", "codex", "--skills-dir", "sk"}, "cannot be combined"},
 		{"list rejects both scope flags", []string{"list", "--project", "--global"}, "none of the others"},
@@ -761,5 +762,66 @@ func TestUpdateEverywhereSkipsMissingProjects(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Skipping "+gone) {
 		t.Fatalf("expected missing project to be skipped with a note, got %q", out.String())
+	}
+}
+
+// TestUpdateEverywhereEveryoneSweepsEveryHarnessAndProject covers the widest
+// update bmo performs: every harness, in every project the registry knows,
+// from a directory that is none of them.
+func TestUpdateEverywhereEveryoneSweepsEveryHarnessAndProject(t *testing.T) {
+	home := isolateHome(t)
+	claudeProject := t.TempDir()
+	codexProject := t.TempDir()
+	installIntoProject(t, claudeProject, "claude", "demo")
+	installIntoProject(t, codexProject, "codex", "other")
+	t.Chdir(t.TempDir())
+
+	out, err := runBmo(t, home, "update", "everywhere", "everyone")
+	if err != nil {
+		t.Fatalf("bmo update everywhere everyone: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, claudeProject+" (claude):") || !strings.Contains(out, "demo is up to date") {
+		t.Fatalf("expected the claude project visited, got %q", out)
+	}
+	if !strings.Contains(out, codexProject+" (codex):") || !strings.Contains(out, "other is up to date") {
+		t.Fatalf("expected the codex project visited, got %q", out)
+	}
+}
+
+// TestUpdateEveryoneCoversEveryHarnessInThisDirectory is the narrower form:
+// no "everywhere", so it stays with the destinations the current directory
+// resolves to — but still visits every harness rather than just Claude.
+func TestUpdateEveryoneCoversEveryHarnessInThisDirectory(t *testing.T) {
+	home := isolateHome(t)
+	project := t.TempDir()
+	installIntoProject(t, project, "claude", "demo")
+	installIntoProject(t, project, "codex", "other")
+	elsewhere := t.TempDir()
+	installIntoProject(t, elsewhere, "claude", "not-here")
+	t.Chdir(project)
+
+	out, err := runBmo(t, home, "update", "here", "everyone")
+	if err != nil {
+		t.Fatalf("bmo update here everyone: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "demo is up to date") || !strings.Contains(out, "other is up to date") {
+		t.Fatalf("expected both harnesses in this project, got %q", out)
+	}
+	if strings.Contains(out, "not-here") {
+		t.Fatalf(`expected "here" to stay in this project, got %q`, out)
+	}
+}
+
+func TestUpdateEveryoneRejectsASingleDestination(t *testing.T) {
+	for _, flag := range [][]string{{"--skills-dir", "sk"}, {"--harness", "codex"}} {
+		t.Run(flag[0], func(t *testing.T) {
+			home := isolateHome(t)
+			t.Chdir(t.TempDir())
+			args := append([]string{"update", "everyone"}, flag...)
+			out, err := runBmo(t, home, args...)
+			if err == nil || !strings.Contains(err.Error(), "already covers every harness") {
+				t.Fatalf("bmo update everyone %s error = %v, want a refusal\n%s", flag[0], err, out)
+			}
+		})
 	}
 }

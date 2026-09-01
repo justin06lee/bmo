@@ -49,6 +49,8 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newInspectCommand())
 	root.AddCommand(newListCommand(opts))
 	root.AddCommand(newRemoveCommand(opts))
+	root.AddCommand(newScoutCommand(opts))
+	root.AddCommand(newShareCommand(opts))
 	root.AddCommand(newUpdateCommand(opts))
 	root.AddCommand(newDoctorCommand(opts))
 	root.AddCommand(newHarnessesCommand())
@@ -765,10 +767,11 @@ func newRemoveCommand(opts *options) *cobra.Command {
 
 func newUpdateCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "update [SKILL_NAME] [here|everywhere] [HARNESS]",
+		Use:   "update [SKILL_NAME] [here|everywhere] [HARNESS|everyone]",
 		Short: "Update installed skills whose source content changed",
 		Example: `  bmo update demo here
-  bmo update codex`,
+  bmo update codex
+  bmo update everywhere everyone`,
 		Args: argsWithKeywords(func(cmd *cobra.Command, args []string) error {
 			if opts.all {
 				return cobra.NoArgs(cmd, args)
@@ -780,9 +783,18 @@ func newUpdateCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			args, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
+			args, keyword, positionalHarness, err := splitCommandKeywords(cmd, args)
 			if err != nil {
 				return err
+			}
+			// "everyone" is not a harness to resolve; it clears the selection
+			// so the sweep visits every preset's destinations.
+			everyone := positionalHarness == everyoneKeyword
+			if everyone {
+				if opts.harness != "" || opts.skillsDir != "" {
+					return errors.New(`"everyone" already covers every harness; drop --harness and --skills-dir`)
+				}
+				positionalHarness = ""
 			}
 			effective, err := withPositionalHarness(opts, positionalHarness)
 			if err != nil {
@@ -805,6 +817,9 @@ func newUpdateCommand(opts *options) *cobra.Command {
 			// global skills plus every project bmo has ever installed into.
 			if keyword == "everywhere" {
 				return updateEverywhere(cmd, cwd, args, effective, cache)
+			}
+			if everyone {
+				return updateEveryone(cmd, cwd, keyword, args, effective, cache)
 			}
 			applyKeywordFilter(keyword, effective)
 			scopes := []bmo.Scope{selectedScope(effective)}
@@ -910,6 +925,7 @@ func newHarnessesCommand() *cobra.Command {
 			tw.Flush()
 			fmt.Fprintln(cmd.OutOrStdout(), "\nInstall with: bmo add SOURCE HARNESS")
 			fmt.Fprintln(cmd.OutOrStdout(), "Install to detected harnesses with: bmo add SOURCE everyone")
+			fmt.Fprintln(cmd.OutOrStdout(), "Give them all the same skills with: bmo share everyone")
 			fmt.Fprintln(cmd.OutOrStdout(), "For any other harness, pass --skills-dir PATH.")
 		},
 	}
@@ -931,8 +947,9 @@ func selectedScope(opts *options) bmo.Scope {
 	return bmo.ScopeGlobal
 }
 
-// everyoneKeyword fans an install out to every detected harness. Only `bmo add`
-// writes to more than one destination, so the other commands reject it.
+// everyoneKeyword fans a command out across harnesses: add installs into every
+// detected one, update sweeps every one's destinations, and share syncs between
+// them. The commands that resolve a single destination reject it.
 const everyoneKeyword = "everyone"
 
 // splitKeywords pulls the optional location keyword ("here" / "everywhere") and
@@ -992,19 +1009,39 @@ func splitAddKeywords(args []string) (rest []string, scopeKeyword, harnessKeywor
 	return splitKeywords(args, 1)
 }
 
-// splitHarnessKeywords is splitKeywords for the harness-aware commands other
-// than add. They resolve exactly one destination, so "everyone" cannot mean
-// anything for them and is reported instead of being taken for a harness or a
-// skill name.
+// splitHarnessKeywords is splitKeywords for the harness-aware commands that
+// resolve exactly one destination, so "everyone" cannot mean anything for them
+// and is reported instead of being taken for a harness or a skill name.
 func splitHarnessKeywords(args []string, minArgs int) (rest []string, scopeKeyword, harnessKeyword string, err error) {
 	rest, scopeKeyword, harnessKeyword, err = splitKeywords(args, minArgs)
 	if err != nil {
 		return nil, "", "", err
 	}
 	if harnessKeyword == everyoneKeyword {
-		return nil, "", "", errors.New(`"everyone" installs to every detected harness and is only supported by bmo add; run this command per harness instead (a skill literally named everyone is covered by the command's no-name form, e.g. a plain bmo update)`)
+		return nil, "", "", errors.New(`"everyone" fans out across harnesses and is only supported by bmo add, bmo update, and bmo share; run this command per harness instead (a skill literally named everyone is covered by the command's no-name form, e.g. a plain bmo list)`)
 	}
 	return rest, scopeKeyword, harnessKeyword, nil
+}
+
+// fansOutAcrossHarnesses reports whether "everyone" is meaningful for a
+// command: add installs into every detected harness, while update and share
+// sweep every harness's destinations at once.
+func fansOutAcrossHarnesses(name string) bool {
+	switch name {
+	case "add", "update", "share":
+		return true
+	}
+	return false
+}
+
+// splitCommandKeywords parses a command's positional keywords the way that
+// command accepts them, so its argument validator and its RunE can never
+// disagree about which tokens are keywords.
+func splitCommandKeywords(cmd *cobra.Command, args []string) (rest []string, scopeKeyword, harnessKeyword string, err error) {
+	if fansOutAcrossHarnesses(cmd.Name()) {
+		return splitKeywords(args, minPositionalArgs(cmd))
+	}
+	return splitHarnessKeywords(args, minPositionalArgs(cmd))
 }
 
 // minPositionalArgs reports how many positional args a harness-aware command
@@ -1080,7 +1117,7 @@ func applyKeywordFilter(keyword string, opts *options) {
 // something the command silently ignores.
 func argsWithKeywords(base cobra.PositionalArgs) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
-		rest, _, _, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
+		rest, _, _, err := splitCommandKeywords(cmd, args)
 		if err != nil {
 			return err
 		}
@@ -1245,7 +1282,7 @@ func bootstrapBmoSkillForOptions(cmd *cobra.Command, args []string, opts *option
 // yield an empty name.
 func positionalHarnessFor(cmd *cobra.Command, args []string) string {
 	switch cmd.Name() {
-	case "add", "init", "list", "remove", "update", "doctor":
+	case "add", "init", "list", "remove", "update", "doctor", "share":
 		_, _, harness, err := splitKeywords(args, minPositionalArgs(cmd))
 		if err != nil {
 			return ""
@@ -1335,23 +1372,138 @@ func listEntries(cwd string, opts *options) ([]bmo.SkillMeta, error) {
 	return entries, nil
 }
 
+// sweepLocation is one place a fan-out command acts on: a directory paired
+// with the scope whose destinations it resolves there.
+type sweepLocation struct {
+	dir   string
+	scope bmo.Scope
+	label string
+}
+
+// sweepLocations resolves where a multi-place command works, shared by update
+// and share so the two cannot drift apart on what a location keyword means.
+//
+// "everywhere" reaches past the current directory: the global destinations
+// plus every project bmo has installed into. "here" is this project alone,
+// and with no keyword a sweep covers the two destinations the current
+// directory resolves to. Registered projects that have since been deleted are
+// returned separately so the caller can report them rather than fail.
+func sweepLocations(cwd, keyword string, opts *options) (locations []sweepLocation, missing []string, err error) {
+	global := sweepLocation{dir: cwd, scope: bmo.ScopeGlobal, label: "Global"}
+	project := sweepLocation{dir: cwd, scope: bmo.ScopeProject, label: cwd}
+	switch {
+	case keyword == "everywhere":
+		locations = []sweepLocation{global}
+		projects, err := bmo.RegisteredProjects()
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, dir := range projects {
+			if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+				missing = append(missing, dir)
+				continue
+			}
+			locations = append(locations, sweepLocation{dir: dir, scope: bmo.ScopeProject, label: dir})
+		}
+		return locations, missing, nil
+	case keyword == "here" || opts.project:
+		return []sweepLocation{project}, nil, nil
+	case opts.global:
+		// --global stays the single global destination it has always been;
+		// only the "everywhere" keyword reaches into registered projects.
+		return []sweepLocation{global}, nil, nil
+	default:
+		return []sweepLocation{global, project}, nil, nil
+	}
+}
+
+// updateSweepRequest is one multi-destination update.
+type updateSweepRequest struct {
+	locations []sweepLocation
+	// missing are registered projects that no longer exist on disk.
+	missing   []string
+	harnesses []string
+	args      []string
+	opts      *options
+	cache     map[string]sourceResolution
+	// where names the sweep's reach in its "nothing tracked" messages.
+	where string
+	// hint is printed after the empty message, when the sweep found nothing.
+	hint string
+}
+
+// updateSweep updates every harness destination at every location, skipping
+// the ones that track nothing so a nine-harness sweep does not report eight
+// failures for a machine that only uses one. Presets may share one metadata
+// file (codex and amp share the project .agents destination); each file is
+// visited once, credited to the first name. One destination's failures do not
+// stop the sweep; they are aggregated and reported at the end.
+func updateSweep(cmd *cobra.Command, req updateSweepRequest) error {
+	out := cmd.OutOrStdout()
+	named := ""
+	if len(req.args) == 1 {
+		named = req.args[0]
+	}
+	for _, dir := range req.missing {
+		fmt.Fprintf(out, "Skipping %s (directory no longer exists)\n", dir)
+	}
+	if len(req.missing) > 0 {
+		fmt.Fprintln(out)
+	}
+	found := false
+	var failures []string
+	seenMetadata := map[string]bool{}
+	for _, location := range req.locations {
+		for _, hname := range req.harnesses {
+			target, err := bmo.ResolveTarget(hname, location.scope, location.dir, "")
+			if err != nil {
+				return err
+			}
+			if seenMetadata[target.MetadataPath] {
+				continue
+			}
+			seenMetadata[target.MetadataPath] = true
+			if (named == "" && !hasTrackedSkills(target.MetadataPath)) || (named != "" && !metadataHasSkill(target.MetadataPath, named)) {
+				continue
+			}
+			if found {
+				fmt.Fprintln(out)
+			}
+			fmt.Fprintf(out, "%s (%s):\n", location.label, hname)
+			harnessOpts := *req.opts
+			harnessOpts.harness = hname
+			if err := updateScope(cmd, location.dir, location.scope, req.args, &harnessOpts, req.cache); err != nil {
+				failures = append(failures, err.Error())
+			}
+			found = true
+		}
+	}
+	if !found {
+		if named != "" {
+			return fmt.Errorf("skill is not tracked by bmo %s: %s", req.where, named)
+		}
+		fmt.Fprintf(out, "No tracked skills %s yet.\n", req.where)
+		if req.hint != "" {
+			fmt.Fprintln(out, req.hint)
+		}
+	}
+	if len(failures) > 0 {
+		return errors.New(strings.Join(failures, "\n"))
+	}
+	return nil
+}
+
 // updateEverywhere updates the global scope plus every project recorded in
 // the registry, so `bmo update everywhere` reaches repos without being run
 // inside them. With a skill name, only the places tracking that skill run.
-// Unless a harness was named, every built-in preset is swept: project installs
+// Unless a harness is named, every built-in preset is swept: project installs
 // bmo registered for codex, gemini, and friends must not go silently stale
-// just because the default harness is Claude. One destination's failures do
-// not stop the sweep; they are aggregated and reported at the end.
+// just because the default harness is Claude.
 func updateEverywhere(cmd *cobra.Command, cwd string, args []string, opts *options, cache map[string]sourceResolution) error {
-	out := cmd.OutOrStdout()
 	if opts.skillsDir != "" {
 		return errors.New("update everywhere cannot discover arbitrary --skills-dir locations; choose --project or --global")
 	}
 	harnessNames := everywhereHarnesses(opts)
-	named := ""
-	if len(args) == 1 {
-		named = args[0]
-	}
 	// Backfill: repos installed into before the registry existed register the
 	// first time an update runs inside them, whichever harness they used.
 	for _, hname := range harnessNames {
@@ -1364,66 +1516,33 @@ func updateEverywhere(cmd *cobra.Command, cwd string, args []string, opts *optio
 			break
 		}
 	}
-
-	found := false
-	var failures []string
-	// Presets may share one metadata file (codex and amp share the project
-	// .agents destination); visit each file once, credited to the first name.
-	seenMetadata := map[string]bool{}
-	runOne := func(dir string, scope bmo.Scope, hname, label string) error {
-		target, err := bmo.ResolveTarget(hname, scope, dir, "")
-		if err != nil {
-			return err
-		}
-		if seenMetadata[target.MetadataPath] {
-			return nil
-		}
-		seenMetadata[target.MetadataPath] = true
-		if (named == "" && !hasTrackedSkills(target.MetadataPath)) || (named != "" && !metadataHasSkill(target.MetadataPath, named)) {
-			return nil
-		}
-		if found {
-			fmt.Fprintln(out)
-		}
-		fmt.Fprintf(out, "%s (%s):\n", label, hname)
-		harnessOpts := *opts
-		harnessOpts.harness = hname
-		if err := updateScope(cmd, dir, scope, args, &harnessOpts, cache); err != nil {
-			failures = append(failures, err.Error())
-		}
-		found = true
-		return nil
-	}
-	for _, hname := range harnessNames {
-		if err := runOne(cwd, bmo.ScopeGlobal, hname, "Global"); err != nil {
-			return err
-		}
-	}
-	projects, err := bmo.RegisteredProjects()
+	locations, missing, err := sweepLocations(cwd, "everywhere", opts)
 	if err != nil {
 		return err
 	}
-	for _, dir := range projects {
-		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-			fmt.Fprintf(out, "\nSkipping %s (directory no longer exists)\n", dir)
-			continue
-		}
-		for _, hname := range harnessNames {
-			if err := runOne(dir, bmo.ScopeProject, hname, dir); err != nil {
-				return err
-			}
-		}
+	return updateSweep(cmd, updateSweepRequest{
+		locations: locations, missing: missing, harnesses: harnessNames,
+		args: args, opts: opts, cache: cache, where: "anywhere",
+		hint: "Run `bmo scout` from a directory above your repos to record project installs bmo has not seen yet.",
+	})
+}
+
+// updateEveryone updates every harness's destinations at the locations the
+// current directory resolves to. `everywhere` reaches further and is handled
+// by updateEverywhere; this is the form for "every harness, right here".
+func updateEveryone(cmd *cobra.Command, cwd, keyword string, args []string, opts *options, cache map[string]sourceResolution) error {
+	locations, missing, err := sweepLocations(cwd, keyword, opts)
+	if err != nil {
+		return err
 	}
-	if !found {
-		if named != "" {
-			return fmt.Errorf("skill is not tracked by bmo anywhere: %s", named)
-		}
-		fmt.Fprintln(out, "No tracked skills anywhere yet.")
+	where := "in any harness here"
+	if keyword == "" && !opts.project && !opts.global {
+		where = "in any harness for this directory"
 	}
-	if len(failures) > 0 {
-		return errors.New(strings.Join(failures, "\n"))
-	}
-	return nil
+	return updateSweep(cmd, updateSweepRequest{
+		locations: locations, missing: missing, harnesses: everywhereHarnesses(opts),
+		args: args, opts: opts, cache: cache, where: where,
+	})
 }
 
 // everywhereHarnesses resolves which presets an everywhere sweep visits: the
@@ -1434,11 +1553,10 @@ func everywhereHarnesses(opts *options) []string {
 	if opts.harness != "" {
 		return []string{opts.harness}
 	}
-	names := []string{string(bmo.HarnessClaude), string(bmo.HarnessCodex)}
-	for _, name := range bmo.HarnessNames() {
-		if name != string(bmo.HarnessClaude) && name != string(bmo.HarnessCodex) {
-			names = append(names, name)
-		}
+	order := bmo.HarnessPreferenceOrder()
+	names := make([]string, 0, len(order))
+	for _, harness := range order {
+		names = append(names, string(harness))
 	}
 	return names
 }

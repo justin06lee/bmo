@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -264,7 +265,7 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 			Harness:      HarnessCustom,
 			Scope:        scope,
 			SkillsDir:    dir,
-			MetadataPath: filepath.Join(filepath.Dir(dir), "bmo-lock.json"),
+			MetadataPath: filepath.Join(filepath.Dir(dir), ProjectLockFileName),
 		}, nil
 	}
 
@@ -301,7 +302,7 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 			metadataPath, err = GlobalMetadataPath()
 		}
 	} else if scope == ScopeProject {
-		metadataPath = filepath.Join(filepath.Dir(skillsDir), "bmo-lock.json")
+		metadataPath = filepath.Join(filepath.Dir(skillsDir), ProjectLockFileName)
 	} else {
 		var home string
 		home, err = os.UserHomeDir()
@@ -387,4 +388,52 @@ func (t Target) InvocationHint(name string) string {
 	default:
 		return "ask the agent to use " + name
 	}
+}
+
+// ProjectLockFileName is the per-project metadata file bmo writes beside a
+// harness's project skills directory.
+const ProjectLockFileName = "bmo-lock.json"
+
+// ProjectConfigDir returns the harness's project configuration directory: the
+// parent of its project skills directory, and the folder holding that
+// project's lock file. It is the on-disk marker `bmo scout` looks for when
+// sweeping a tree for projects bmo has installed into.
+func (h HarnessInfo) ProjectConfigDir() string {
+	return path.Dir(h.ProjectDir)
+}
+
+// ProjectLockRel returns this harness's project metadata file relative to a
+// project root, in slash form. ResolveTarget stays authoritative for absolute
+// paths; harness_test pins the two together so a preset cannot gain a lock
+// file location that a scan would miss.
+func (h HarnessInfo) ProjectLockRel() string {
+	return path.Join(h.ProjectConfigDir(), ProjectLockFileName)
+}
+
+// HarnessPreferenceOrder returns every preset in the order bmo prefers when
+// more than one of them resolves to the same destination: Claude first for
+// backward-compatible familiarity, then Codex so the shared .agents
+// destination is credited to it, then the rest in name order.
+func HarnessPreferenceOrder() []Harness {
+	order := []Harness{HarnessClaude, HarnessCodex}
+	for _, name := range HarnessNames() {
+		if harness := Harness(name); harness != HarnessClaude && harness != HarnessCodex {
+			order = append(order, harness)
+		}
+	}
+	return order
+}
+
+// HarnessesByProjectConfigDir groups the presets by the project configuration
+// directory they share, so a single pass over a directory tree can attribute
+// one lock file to every harness that writes it (.agents is both Codex's and
+// Amp's). Values follow HarnessPreferenceOrder.
+func HarnessesByProjectConfigDir() map[string][]HarnessInfo {
+	grouped := map[string][]HarnessInfo{}
+	for _, harness := range HarnessPreferenceOrder() {
+		info := harnesses[harness]
+		dir := info.ProjectConfigDir()
+		grouped[dir] = append(grouped[dir], info)
+	}
+	return grouped
 }

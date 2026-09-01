@@ -1,6 +1,6 @@
 ---
 name: bmo
-description: Use when managing portable coding-agent skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade, or target ChatGPT/Codex/Claude/Cursor/Gemini/Copilot/Windsurf/OpenCode/Amp/Cline) or when creating a bmo-compatible SKILL.md package.
+description: Use when managing portable coding-agent skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade, scout for existing installs, share skills between harnesses, or target ChatGPT/Codex/Claude/Cursor/Gemini/Copilot/Windsurf/OpenCode/Amp/Cline) or when creating a bmo-compatible SKILL.md package.
 ---
 
 # bmo
@@ -38,6 +38,9 @@ bmo inspect SOURCE    # preview a skill without installing
 bmo list              # list installed skills (both scopes)
 bmo update            # re-check every tracked skill, reinstall the changed ones
 bmo update NAME       # same check for one skill
+bmo update everywhere everyone # every skill, every harness, every known project
+bmo scout             # find projects bmo installed into, record them for later
+bmo share everyone    # give every harness the union of everyone's skills
 bmo remove NAME       # uninstall a skill
 bmo doctor            # run diagnostics
 bmo init              # (re)install this bundled bmo skill
@@ -54,7 +57,7 @@ the user can see the file list and any executable-file warnings first.
 Claude is the backward-compatible default. For `add`, place a harness name
 directly after the source: `bmo add owner/repo codex`. The `--harness NAME`
 form remains available for compatibility and is used by `init`, `list`,
-`remove`, `update`, and `doctor`:
+`remove`, `update`, `share`, and `doctor`:
 
 | Name | Project | Global |
 |------|---------|--------|
@@ -97,12 +100,15 @@ A bare `owner/repo` is treated as GitHub. When no ref is given, bmo tries the
 
 ### Scopes: `here` and `everywhere`
 
-`add`, `init`, `list`, `remove`, `update`, and `doctor` accept an optional
-location keyword as a plain positional word, before or after the other
-argument:
+`add`, `init`, `list`, `remove`, `update`, `share`, and `doctor` accept an
+optional location keyword as a plain positional word, before or after the
+other argument:
 
 - **`here`** — the selected harness's project skills directory
 - **`everywhere`** — the selected harness's global directory (the default)
+
+On `update` and `share`, which sweep rather than install, `everywhere` means
+more: the global destinations **plus every project in the registry**.
 
 ```bash
 bmo add owner/repo here       # install into this project
@@ -129,8 +135,8 @@ positional harness with `--harness`/`--skills-dir`.
 
 ### Naming a harness positionally
 
-`add`, `init`, `list`, `remove`, `update`, and `doctor` all accept a harness
-name as a plain positional word — the friendlier alias for `--harness`:
+`add`, `init`, `list`, `remove`, `update`, `share`, and `doctor` all accept a
+harness name as a plain positional word — the friendlier alias for `--harness`:
 
 ```bash
 bmo init codex                 # install the bundled skill for Codex
@@ -138,10 +144,12 @@ bmo list here codex            # this project's Codex skills
 bmo update codex               # every skill tracked for Codex
 bmo remove cool-skill codex    # remove from Codex
 bmo doctor codex               # diagnose Codex's destinations
+bmo share codex                # seed every other harness from Codex
 ```
 
-`everyone` works only with `add`; the other commands act on a single harness
-and reject it with an explanation. Positional harness names match
+`everyone` works with `add`, `update`, and `share` — the commands that fan out
+across harnesses. `init`, `list`, `remove`, and `doctor` act on a single
+harness and reject it with an explanation. Positional harness names match
 case-insensitively, like `--harness`.
 
 Two disambiguation rules matter when a skill or source is *named* like a
@@ -150,8 +158,8 @@ needs a name), while `bmo remove codex codex` removes it from the Codex
 harness. `bmo add codex` likewise installs the local folder `./codex`, and
 `bmo remove everyone` removes a skill named `everyone`. `bmo update codex`
 means "update everything tracked for Codex", since update's name argument is
-optional; a skill named `codex` or `everyone` is covered by a plain
-`bmo update`.
+optional; a skill named `codex` is covered by a plain `bmo update`, and so is
+one named `everyone` (which `update` now reads as the all-harness keyword).
 
 ### Updating
 
@@ -165,6 +173,82 @@ its repo in `~/.bmo/projects.json`) and updates their skills too — no need to
 cd into each repo. Vanished repos are skipped with a note. Unless a harness is
 named, the sweep covers every built-in harness, so codex/gemini installs are
 updated by the plain command; one failure never stops the rest of the sweep.
+
+`everyone` spells the all-harness sweep out loud and pairs with any location:
+
+```bash
+bmo update everywhere everyone   # same as `bmo update everywhere`, made explicit
+bmo update everyone              # every harness, this directory's destinations
+bmo update here everyone         # every harness, this project only
+```
+
+It cannot be combined with `--harness` or `--skills-dir`, which each name one
+destination. Destinations tracking nothing are skipped silently.
+
+If `update everywhere` misses a repo, the registry has not seen it — run
+`bmo scout` (below). That is the normal case after cloning a repo whose skills
+were committed, or on a new machine.
+
+### Finding installs: `bmo scout`
+
+```bash
+bmo scout [PATH] [--depth N] [--hidden] [--prune] [--dry-run] [--json]
+```
+
+Walks every directory below `PATH` (the current directory by default), finds
+the projects holding a bmo lock file that tracks skills, and records them in
+`~/.bmo/projects.json` so `bmo update everywhere` and `bmo share everywhere`
+can reach them.
+
+It never installs, moves, or deletes a skill — the only file it writes is the
+project registry. `--dry-run` previews without writing even that.
+
+The walk skips `node_modules`, `vendor`, `.venv`, `target`, `dist`, `build`,
+`.git`, and similar trees, plus unrelated hidden directories unless `--hidden`
+is passed; harness configuration folders (`.claude`, `.agents`, `.cursor`, …)
+are always inspected. Symlinked directories are not followed. `--depth N`
+bounds a large sweep (`bmo scout ~ --depth 4`). `--prune` forgets registered
+projects whose directory is gone; it is opt-in, because an unmounted drive
+looks the same as a deleted repo.
+
+Only the built-in presets are discoverable: a `--skills-dir` install puts its
+lock file in an arbitrary place.
+
+### Syncing harnesses: `bmo share`
+
+```bash
+bmo share [here|everywhere] [everyone|HARNESS] [--project|--global] [--yes] [--dry-run]
+```
+
+Gives every harness the **union** of the skills all of them have. Whatever
+Claude has and Codex lacks is copied into Codex, and vice versa.
+
+The sync is **purely additive**: a skill is only ever copied into a harness
+that does not already have it, nothing is replaced or deleted (there is no
+`--force`), an untracked folder in the way is left alone and reported, and
+running it twice is a no-op.
+
+Skills stay in the location they were installed in — a project's harnesses
+exchange that project's skills, the global destinations exchange global ones.
+A project skill is never promoted into global config; use
+`bmo add ./that-skill everyone` for that.
+
+```bash
+bmo share                      # global + this project
+bmo share everywhere everyone  # global + every registered repo, every harness
+bmo share here                 # this project only
+bmo share codex                # seed every other harness from Codex only
+```
+
+Copies come from the installed skill folder, so a sync is local and works
+offline, but each copy keeps the donor's recorded source — `bmo update` in the
+new destination still follows the real upstream.
+
+Participants are the harnesses detected on this machine plus any harness that
+already tracks skills at that location. A skill a portable harness would reject
+(a legacy Claude skill with no `name:` in its frontmatter) is reported as a
+skipped addition instead of failing the sync. Run `bmo scout` first so
+`bmo share everywhere` knows about every project.
 
 ### Installing a whole suite
 
@@ -193,7 +277,8 @@ subpath, or install the odd one out separately with `--name`.
 - `--dry-run` — show what would happen without writing anything; suppresses first-run bootstrap writes
 - `--json` — machine-readable output (on `list`)
 - positional `HARNESS` on `add` — use a built-in coding-harness preset
-- positional `everyone` on `add` — install to every detected harness
+- positional `everyone` on `add`, `update`, `share` — fan out across harnesses
+- `--depth`, `--hidden`, `--prune` (on `scout`) — bound or tidy a sweep
 - `--harness NAME` — compatibility alias and target selector on other commands
 - `--skills-dir PATH` — use an exact skills directory for any other harness
 

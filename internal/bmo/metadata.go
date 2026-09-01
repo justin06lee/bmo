@@ -123,3 +123,11 @@ func NewSkillMetaForTarget(skill Skill, target Target, source Source, installedP
 		SourceType:    string(source.Type),
 	}
 }
+
+// SourceFromMeta reconstructs the source a tracked skill came from. Copying a
+// skill between harnesses must carry its original provenance across, or the
+// destination's `bmo update` would start pulling from the local copy it was
+// seeded with instead of the upstream it really came from.
+func SourceFromMeta(entry SkillMeta) Source {
+	return Source{Raw: entry.Source, Type: SourceType(entry.SourceType), Ref: entry.SourceRef}
+}
