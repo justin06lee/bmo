@@ -352,3 +352,59 @@ func TestInvocationHintPerHarness(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectLockRelMatchesResolveTarget pins the relative lock path a scan
+// looks for to the absolute one an install writes. A preset that gained a lock
+// file location ResolveTarget alone knew about would install skills `bmo scout`
+// could never find again.
+func TestProjectLockRelMatchesResolveTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	project := t.TempDir()
+	for _, info := range Harnesses() {
+		target, err := ResolveTarget(string(info.Name), ScopeProject, project, "")
+		if err != nil {
+			t.Fatalf("ResolveTarget(%s): %v", info.Name, err)
+		}
+		want := filepath.Join(project, filepath.FromSlash(info.ProjectLockRel()))
+		if target.MetadataPath != want {
+			t.Fatalf("%s project metadata = %s, want %s", info.Name, target.MetadataPath, want)
+		}
+		if got := filepath.Join(project, filepath.FromSlash(info.ProjectConfigDir())); got != filepath.Dir(target.SkillsDir) {
+			t.Fatalf("%s config dir = %s, want %s", info.Name, got, filepath.Dir(target.SkillsDir))
+		}
+	}
+}
+
+// TestHarnessGroupingsCoverEveryPreset keeps the scan grouping and the
+// preference order complete: a new preset must appear in both, or fan-out
+// commands would silently skip it.
+func TestHarnessGroupingsCoverEveryPreset(t *testing.T) {
+	order := HarnessPreferenceOrder()
+	if len(order) != len(Harnesses()) {
+		t.Fatalf("preference order covers %d presets, want %d", len(order), len(Harnesses()))
+	}
+	if order[0] != HarnessClaude || order[1] != HarnessCodex {
+		t.Fatalf("preference order = %v, want claude then codex first", order)
+	}
+	grouped := HarnessesByProjectConfigDir()
+	seen := map[Harness]bool{}
+	for dir, infos := range grouped {
+		if strings.Contains(dir, "/") {
+			t.Fatalf("project config dir %q must be a single path segment for a directory scan to match it", dir)
+		}
+		for _, info := range infos {
+			if seen[info.Name] {
+				t.Fatalf("%s appears in more than one grouping", info.Name)
+			}
+			seen[info.Name] = true
+		}
+	}
+	for _, info := range Harnesses() {
+		if !seen[info.Name] {
+			t.Fatalf("%s is missing from the project config dir grouping", info.Name)
+		}
+	}
+	if agents := grouped[".agents"]; len(agents) != 2 || agents[0].Name != HarnessCodex {
+		t.Fatalf(".agents grouping = %v, want codex first then amp", agents)
+	}
+}

@@ -51,27 +51,84 @@ func RegisteredProjects() ([]string, error) {
 // RecordProject adds a project directory to the registry, absolutized and
 // deduplicated. Recording the same project again is a cheap no-op.
 func RecordProject(dir string) error {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return err
-	}
+	_, err := RecordProjects([]string{dir})
+	return err
+}
+
+// RecordProjects adds every directory to the registry in one write and returns
+// the ones that were not already recorded, sorted. Batching matters for
+// `bmo scout`, which can discover dozens of projects in a single sweep and
+// would otherwise rewrite the registry once per hit.
+func RecordProjects(dirs []string) ([]string, error) {
 	projects, err := RegisteredProjects()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, p := range projects {
-		if p == abs {
-			return nil
+	known := make(map[string]bool, len(projects))
+	for _, project := range projects {
+		known[project] = true
+	}
+	var added []string
+	for _, dir := range dirs {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
 		}
+		if known[abs] {
+			continue
+		}
+		known[abs] = true
+		added = append(added, abs)
+		projects = append(projects, abs)
 	}
-	projects = append(projects, abs)
+	if len(added) == 0 {
+		return nil, nil
+	}
+	sort.Strings(added)
 	sort.Strings(projects)
+	if err := writeProjectRegistry(projects); err != nil {
+		return nil, err
+	}
+	return added, nil
+}
+
+// PruneProjects drops registry entries whose directory no longer exists,
+// returning what it removed. The registry only tells `bmo update everywhere`
+// where to look, so a wrongly pruned entry costs a re-run of `bmo scout` and
+// never any installed skill. Nothing on disk is deleted.
+func PruneProjects() ([]string, error) {
+	projects, err := RegisteredProjects()
+	if err != nil {
+		return nil, err
+	}
+	var kept, removed []string
+	for _, dir := range projects {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			kept = append(kept, dir)
+			continue
+		}
+		removed = append(removed, dir)
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := writeProjectRegistry(kept); err != nil {
+		return nil, err
+	}
+	return removed, nil
+}
+
+// writeProjectRegistry replaces the registry atomically.
+func writeProjectRegistry(projects []string) error {
 	path, err := ProjectRegistryPath()
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
+	}
+	if projects == nil {
+		projects = []string{}
 	}
 	data, err := json.MarshalIndent(projectRegistry{Version: 1, Projects: projects}, "", "  ")
 	if err != nil {

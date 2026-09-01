@@ -62,7 +62,7 @@ func GlobalMetadataPath() (string, error) {
 }
 
 func ProjectMetadataPath(cwd string) string {
-	return filepath.Join(cwd, ".claude", "bmo-lock.json")
+	return filepath.Join(cwd, ".claude", ProjectLockFileName)
 }
 
 // BootstrapMarkerPathFor returns the sentinel file that records the one-time

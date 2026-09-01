@@ -244,7 +244,10 @@ func checkProjectRegistry() []DoctorCheck {
 		return []DoctorCheck{{DoctorError, fmt.Sprintf("Project registry: %v", err)}}
 	}
 	if len(projects) == 0 {
-		return nil
+		// Not a fault: a machine with only global installs has nothing to
+		// register. Naming the discovery command here is what turns an empty
+		// `bmo update everywhere` into something the user can act on.
+		return []DoctorCheck{{DoctorOK, "No registered projects yet; run `bmo scout` to find project installs"}}
 	}
 	var checks []DoctorCheck
 	live := 0

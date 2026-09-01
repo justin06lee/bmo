@@ -39,6 +39,8 @@ bmo add bmo    # ...or restore it if you deleted it
 
 It resolves a source (GitHub repo, local path, or zip URL), finds installable skill folders, validates the `SKILL.md` frontmatter, copies the selected folder into the target harness's skills directory, and records metadata so the skill can be listed, updated, or removed later.
 
+Because it tracks what it installed and where, it can also work across a whole machine: [`bmo scout`](#scout) finds every project it has installed into, [`bmo update everywhere everyone`](#everyone-on-update) refreshes all of them for every harness at once, and [`bmo share`](#share) hands each harness whatever the others have.
+
 A skill can also bundle **Claude Code subagents** in an `agents/` folder. With the `claude` preset, bmo installs and tracks them separately — see [Subagents](#subagents). Other harnesses use different agent schemas, so bmo leaves that folder inside the installed skill as a resource instead of writing incompatible live configuration.
 
 When the skill folder doubles as a working repository, a [`.bmoignore`](#bmoignore) file keeps tests, CI config, and demo assets out of the install.
@@ -133,6 +135,15 @@ bmo list
 
 # Update every installed skill that changed at its source
 bmo update
+
+# Find every project below here that bmo has installed into, and remember it
+bmo scout
+
+# Update every skill, for every harness, in every project bmo knows about
+bmo update everywhere everyone
+
+# Give every harness the same set of skills (purely additive, nothing replaced)
+bmo share everyone
 
 # Remove a skill
 bmo remove skill-name
@@ -324,6 +335,133 @@ project installed into with `bmo add src codex here` is updated by a plain
 (`bmo update everywhere codex`) to narrow the sweep to it. One destination's
 failure never stops the sweep; everything that went wrong is reported at the
 end, after every reachable install has been updated.
+
+The registry only knows the repos bmo installed into *on this machine*. After a
+`git clone` of a repo that already has skills committed, or a move to a new
+machine, run [`bmo scout`](#scout) to find them.
+
+#### `everyone` on `update`
+
+`everyone` spells the all-harness sweep out loud, and works with or without a
+location keyword:
+
+```bash
+bmo update everywhere everyone      # every harness, global + every registered repo
+bmo update everyone                 # every harness, this directory's destinations
+bmo update here everyone            # every harness, this project only
+bmo update cool-skill everywhere everyone
+```
+
+`bmo update everywhere everyone` is identical to `bmo update everywhere` — the
+sweep was already machine-wide. It cannot be combined with `--harness` or
+`--skills-dir`, which each name a single destination. Destinations that track
+nothing are skipped silently, so a nine-harness sweep on a one-harness machine
+reports one heading rather than eight failures.
+
+### `scout`
+
+Find the projects bmo has installed skills into, and record them so
+`bmo update everywhere` and `bmo share everywhere` can reach them.
+
+```bash
+bmo scout [PATH] [--depth N] [--hidden] [--prune] [--dry-run] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--depth N` | Limit how many directories below `PATH` a project may sit (0 = unlimited) |
+| `--hidden` | Also descend into unrelated hidden directories |
+| `--prune` | Drop registered projects whose directory no longer exists |
+| `--dry-run` | Report findings without touching the registry |
+| `--json` | Machine-readable output |
+
+```bash
+bmo scout               # sweep the current directory
+bmo scout ~/code        # sweep a specific tree
+bmo scout ~ --depth 4   # bounded sweep of a whole home directory
+```
+
+Every directory below `PATH` is walked, looking for a harness configuration
+folder holding a bmo lock file that tracks at least one skill. Each hit is
+reported with the project directory, the harnesses installed there, and how
+many skills they track, then recorded in `~/.bmo/projects.json`.
+
+Scout is **read-only against your skills**: it never installs, moves, or
+deletes anything. The one file it writes is the project registry, which only
+tells later sweeps where to look.
+
+The walk skips the trees that make a filesystem sweep slow without ever holding
+harness configuration — `node_modules`, `vendor`, `.venv`, `target`, `dist`,
+`build`, `.git`, `Pods`, `DerivedData`, and friends — along with unrelated
+hidden directories, unless `--hidden` is given. A harness's own configuration
+folder (`.claude`, `.agents`, `.cursor`, …) is always inspected. Symlinked
+directories are not followed, so the sweep cannot loop or wander outside the
+tree you pointed it at. Directories it cannot read are counted and reported
+rather than aborting the sweep.
+
+`--prune` forgets registered projects whose directory is gone. It is opt-in
+because an unmounted drive looks exactly like a deleted repo, and it only edits
+the registry — a wrongly pruned entry costs another `bmo scout`, never a skill.
+
+Only the built-in presets are discoverable: an install made with
+`--skills-dir` puts its lock file in an arbitrary location, which is the same
+reason `bmo update everywhere` refuses that flag.
+
+### `share`
+
+Give every harness the same set of skills.
+
+```bash
+bmo share [here|everywhere] [everyone|HARNESS] [--project | --global] [--yes] [--dry-run]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--project` | Sync only this project's destinations |
+| `--global` | Sync only the global destinations |
+| `--yes` | Skip confirmation |
+| `--dry-run` | Show what would be copied without writing anything |
+
+```bash
+bmo share                      # global + this project
+bmo share everywhere everyone  # global + every registered repo, every harness
+bmo share here                 # this project only
+bmo share codex --dry-run      # preview seeding everyone else from Codex
+```
+
+Each location's harnesses end up holding the **union** of what all of them
+have: whatever Claude has and Codex lacks is copied into Codex, and vice versa.
+
+The sync is **purely additive**:
+
+- A skill is copied only into a harness that does not already have it.
+- Nothing is replaced, renamed, or deleted — there is no `--force`.
+- A destination folder bmo does not track is left exactly as it is, and
+  reported as a skip.
+- Running it twice is a no-op.
+
+Skills stay in the location they were installed in. A project's harnesses
+exchange that project's skills; the global destinations exchange global skills.
+A project-local skill is never promoted into your global configuration — use
+`bmo add ./that-skill everyone` if that is what you want.
+
+Copies are made from the **installed skill folder**, not re-downloaded, so a
+sync is local and works offline. Each copy still records the donor's original
+source, so `bmo update` in the new destination follows the real upstream rather
+than the harness it was seeded from.
+
+Naming one harness (`bmo share codex`) makes it the only donor: every other
+harness is seeded from it, and it gains nothing itself.
+
+Participating destinations are the harnesses detected on this machine, plus any
+harness that already tracks skills at that location — so a sync never creates
+configuration trees for tools you do not have, and never leaves out one you are
+demonstrably using.
+
+Some skills cannot go everywhere, and share says so instead of failing: a
+legacy Claude skill with no `name:` in its frontmatter is rejected by the
+portable harnesses, and is reported as a skipped addition while the rest of the
+sync proceeds.
 
 ### `doctor`
 
@@ -537,6 +675,12 @@ Additional hardening:
 
 Metadata is stored as JSON and records every installed skill's name, description, source, path, install times, scope, harness, and any Claude subagent files it installed.
 
+Alongside it, `~/.bmo/projects.json` lists the project directories bmo has
+installed into. Project installs add themselves, and [`bmo scout`](#scout)
+backfills the ones bmo has not seen — it is what lets `bmo update everywhere`
+and `bmo share everywhere` reach a repo without being run inside it. It holds
+paths only, never skill content, so deleting it costs one `bmo scout`.
+
 Writes are **atomic** — bmo writes to a temporary file first, syncs it to disk, then renames it over the target. Partial writes are never visible.
 
 ---
@@ -548,7 +692,9 @@ Writes are **atomic** — bmo writes to a temporary file first, syncs it to disk
 3. For Claude, ensure `CLAUDE_CONFIG_DIR` is set if you expect a custom Claude location.
 4. Check the metadata path printed by `bmo doctor --harness NAME`.
 5. For permission issues, verify the skills directory is writable.
-6. Open an [issue](https://github.com/justin06lee/bmo/issues) if problems persist.
+6. If `bmo update everywhere` misses a repo, run [`bmo scout`](#scout) from a
+   directory above it — the repo is probably not in the project registry yet.
+7. Open an [issue](https://github.com/justin06lee/bmo/issues) if problems persist.
 
 ---
 

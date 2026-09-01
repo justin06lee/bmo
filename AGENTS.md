@@ -13,7 +13,7 @@
 
 ## Architecture
 
-- `internal/bmo/` owns source resolution, validation, installation, metadata, paths, harness presets, and diagnostics.
+- `internal/bmo/` owns source resolution, validation, installation, metadata, paths, harness presets, project discovery (`scout.go`, `registry.go`), and diagnostics.
 - `internal/cli/` owns Cobra commands and terminal presentation.
 - `skills/bmo/SKILL.md` is embedded into the binary by `main.go`; keep it synchronized with CLI behavior.
 - A zero-value harness in internal APIs must preserve historical Claude behavior for backward compatibility.
@@ -26,6 +26,9 @@
 - Keep metadata aligned with its resolved destination; presets sharing one `.agents/skills` directory intentionally share that project install.
 - Preserve `CLAUDE_CONFIG_DIR`, `~/.bmo/skills.json`, and `.claude/bmo-lock.json` behavior for existing Claude users.
 - For an unrecognized harness, maintain the `--skills-dir` escape hatch rather than guessing its filesystem convention.
+- A new harness preset must appear in `HarnessPreferenceOrder` and `HarnessesByProjectConfigDir`, or fan-out commands and `bmo scout` will silently skip it.
+- `bmo share` stays purely additive: it never replaces, renames, or deletes an installed skill, and it never promotes a project skill into a global destination.
+- A skill copied between harnesses keeps its donor's recorded source, so `bmo update` in the new destination still resolves the real upstream.
 
 ## Code review rules
 
@@ -33,3 +36,4 @@
 - Flag installs that execute downloaded content; bmo must remain copy-only.
 - Flag new source extraction paths that bypass size caps, zip-slip checks, symlink refusal, or `.bmoignore`.
 - Require tests for every new harness path, metadata location, and scope behavior.
+- Flag a filesystem sweep that follows symlinks, descends into dependency or build trees, or aborts on one unreadable directory.
