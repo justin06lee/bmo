@@ -199,9 +199,40 @@ func (c Conflict) Empty() bool {
 	return c.Path == "" && len(c.Agents) == 0
 }
 
+// TrackedSkillPath resolves the directory a tracked skill actually occupies in
+// a target, and reports whether there is one to act on.
+//
+// The recorded path is honored only while it still resolves inside the
+// target's skills directory. A project directory that was moved or renamed
+// after installation leaves metadata pointing somewhere else entirely, and the
+// copy that is really there is the one named inside the destination bmo
+// resolves now — inside it by construction, so the guard against touching
+// anything outside the managed directory is honored rather than bypassed. When
+// neither exists the entry is a stale record with nothing behind it, and
+// reporting it as such beats claiming a copy was deleted.
+func TrackedSkillPath(name string, entry SkillMeta, target Target) (string, bool) {
+	if withinDir(target.SkillsDir, entry.InstalledPath) == nil {
+		if _, err := os.Lstat(entry.InstalledPath); err == nil {
+			return entry.InstalledPath, true
+		}
+	}
+	relocated := filepath.Join(target.SkillsDir, name)
+	// Lstat, not Stat: a symlink that happens to point at a directory is not
+	// a skill bmo installed, and following it would reach outside the managed
+	// directory after all.
+	if info, err := os.Lstat(relocated); err == nil && info.IsDir() {
+		return relocated, true
+	}
+	return "", false
+}
+
 // RemoveSkillFromTarget removes a skill from one resolved harness destination.
+// A tracked copy that cannot be found under the destination is untracked
+// rather than refused: the metadata entry is the last thing keeping a skill
+// "installed" once its files are gone, and nothing outside the resolved skills
+// directory is ever deleted to satisfy it.
 func RemoveSkillFromTarget(name string, target Target) (SkillMeta, error) {
-	skillsDir, metadataPath := target.SkillsDir, target.MetadataPath
+	metadataPath := target.MetadataPath
 	meta, err := ReadMetadata(metadataPath)
 	if err != nil {
 		return SkillMeta{}, err
@@ -210,9 +241,6 @@ func RemoveSkillFromTarget(name string, target Target) (SkillMeta, error) {
 	if !ok {
 		return SkillMeta{}, fmt.Errorf("skill is not tracked by bmo: %s", name)
 	}
-	if err := withinDir(skillsDir, entry.InstalledPath); err != nil {
-		return SkillMeta{}, fmt.Errorf("refusing to remove %s: %w", name, err)
-	}
 	// Every reason to refuse is checked before the first deletion. Rejecting a
 	// removal after the skill directory is gone would leave the metadata entry
 	// pointing at files that no longer exist, which `bmo list` still reports and
@@ -220,8 +248,10 @@ func RemoveSkillFromTarget(name string, target Target) (SkillMeta, error) {
 	if len(entry.Agents) > 0 && !target.SupportsAgents() {
 		return SkillMeta{}, fmt.Errorf("metadata tracks subagents but harness %s has no compatible agent destination", target.Harness)
 	}
-	if err := os.RemoveAll(entry.InstalledPath); err != nil {
-		return SkillMeta{}, err
+	if installed, ok := TrackedSkillPath(name, entry, target); ok {
+		if err := os.RemoveAll(installed); err != nil {
+			return SkillMeta{}, err
+		}
 	}
 	if len(entry.Agents) > 0 {
 		if err := removeAgents(entry.Agents, target.AgentsDir); err != nil {

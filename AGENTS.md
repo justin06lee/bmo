@@ -27,6 +27,8 @@
 - Preserve `CLAUDE_CONFIG_DIR`, `~/.bmo/skills.json`, and `.claude/bmo-lock.json` behavior for existing Claude users.
 - For an unrecognized harness, maintain the `--skills-dir` escape hatch rather than guessing its filesystem convention.
 - A new harness preset must appear in `HarnessPreferenceOrder` and `HarnessesByProjectConfigDir`, or fan-out commands and `bmo scout` will silently skip it.
+- A fan-out command resolves its destinations through `sweepLocations` and `everywhereHarnesses`, so `everywhere` and `everyone` cannot come to mean different things on different commands.
+- A removal never deletes a path outside the target's resolved skills directory. When metadata records a path that has moved outside it, the copy named inside the resolved directory is removed instead, and an entry with no copy left is untracked rather than refused.
 - `bmo share` stays purely additive: it never replaces, renames, or deletes an installed skill, and it never promotes a project skill into a global destination.
 - A skill copied between harnesses keeps its donor's recorded source, so `bmo update` in the new destination still resolves the real upstream.
 

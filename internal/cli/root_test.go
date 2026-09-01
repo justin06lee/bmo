@@ -116,13 +116,13 @@ func TestSplitHarnessKeywordsRejectsEveryone(t *testing.T) {
 		minArgs int
 	}{
 		{"list-style command", []string{"everyone"}, 0},
-		{"remove-style command", []string{"demo", "everyone"}, 1},
+		{"name-taking command", []string{"demo", "everyone"}, 1},
 		{"everyone beside a location", []string{"here", "everyone"}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, _, err := splitHarnessKeywords(tc.args, tc.minArgs)
-			if err == nil || !strings.Contains(err.Error(), "bmo add, bmo update, and bmo share") {
+			if err == nil || !strings.Contains(err.Error(), "bmo add, bmo remove, bmo update, and bmo share") {
 				t.Fatalf("splitHarnessKeywords(%v, %d) error = %v, want the everyone explanation", tc.args, tc.minArgs, err)
 			}
 		})
@@ -496,11 +496,11 @@ func TestHarnessAwareCommandsRejectBadArguments(t *testing.T) {
 	}{
 		{"doctor rejects a stray argument", []string{"doctor", "bogus-arg"}, "unknown command"},
 		{"list rejects a stray argument", []string{"list", "bogus-arg"}, "unknown command"},
-		{"init rejects everyone", []string{"init", "everyone"}, "bmo add, bmo update, and bmo share"},
-		{"list rejects everyone", []string{"list", "everyone"}, "bmo add, bmo update, and bmo share"},
+		{"init rejects everyone", []string{"init", "everyone"}, "bmo add, bmo remove, bmo update, and bmo share"},
+		{"list rejects everyone", []string{"list", "everyone"}, "bmo add, bmo remove, bmo update, and bmo share"},
 		// remove requires a name, so "everyone" is read as the skill to remove.
 		{"remove reads everyone as the skill name", []string{"remove", "everyone"}, "not tracked"},
-		{"doctor rejects everyone", []string{"doctor", "everyone"}, "bmo add, bmo update, and bmo share"},
+		{"doctor rejects everyone", []string{"doctor", "everyone"}, "bmo add, bmo remove, bmo update, and bmo share"},
 		{"update everyone rejects --harness", []string{"update", "everyone", "--harness", "codex"}, "already covers every harness"},
 		{"share everyone rejects --harness", []string{"share", "everyone", "--harness", "codex"}, "already covers every harness"},
 		{"positional harness beside --harness", []string{"init", "codex", "--harness", "gemini"}, "cannot be combined"},

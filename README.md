@@ -145,7 +145,7 @@ bmo update everywhere everyone
 # Give every harness the same set of skills (purely additive, nothing replaced)
 bmo share everyone
 
-# Remove a skill
+# Remove a skill (add `everywhere` to delete every copy on the machine)
 bmo remove skill-name
 
 # Run diagnostics
@@ -269,7 +269,7 @@ By default (no flags), lists both global and project skills.
 Uninstall a skill.
 
 ```bash
-bmo remove SKILL_NAME [here|everywhere] [HARNESS] [--project | --global] [--harness NAME | --skills-dir PATH] [--yes]
+bmo remove SKILL_NAME [here|everywhere] [HARNESS|everyone] [--project | --global] [--harness NAME | --skills-dir PATH] [--yes]
 ```
 
 | Flag | Description |
@@ -281,6 +281,35 @@ bmo remove SKILL_NAME [here|everywhere] [HARNESS] [--project | --global] [--harn
 | `--yes` | Skip confirmation |
 
 Removes the skill directory from disk and its entry from the metadata file. Any subagents the skill installed are deleted too — only the exact files bmo recorded, so hand-written subagents sharing the directory are left alone.
+
+#### `bmo remove everywhere`: every copy at once
+
+Like `update`, `remove` reads `everywhere` as a sweep rather than "the global
+scope": it deletes **every copy the registry can reach** — the global install
+plus every project bmo has installed into, across every harness.
+
+```bash
+bmo remove cool-skill everywhere        # every copy, everywhere
+bmo remove cool-skill everywhere codex  # every copy, Codex only
+bmo remove cool-skill everyone          # every harness, this directory's destinations
+bmo remove cool-skill here everyone     # every harness, this project only
+```
+
+Every copy is listed with its real path and confirmed once before anything is
+deleted, so a sweep is safe to run just to see where a skill ended up — answer
+`n`, or pass `--yes` to skip the prompt. Locations that never had the skill are
+not an error; only a sweep that finds no copy at all fails. A destination bmo
+cannot clean up (metadata tracking subagents a harness cannot host) never
+strands the others: the rest are removed and the refusal is reported at the end
+with a non-zero exit.
+
+A repo that moved after installation records a path that no longer exists. The
+sweep deletes the copy that is really inside the harness's skills directory,
+and untracks entries whose files are already gone — without ever deleting
+outside the resolved skills directory.
+
+The registry only knows the repos bmo installed into *on this machine*; run
+[`bmo scout`](#scout) first if a sweep misses one.
 
 ### `update`
 
@@ -361,7 +390,8 @@ reports one heading rather than eight failures.
 ### `scout`
 
 Find the projects bmo has installed skills into, and record them so
-`bmo update everywhere` and `bmo share everywhere` can reach them.
+`bmo remove everywhere`, `bmo update everywhere`, and `bmo share everywhere` can
+reach them.
 
 ```bash
 bmo scout [PATH] [--depth N] [--hidden] [--prune] [--dry-run] [--json]
@@ -595,7 +625,7 @@ The rules apply to every walk: which files are copied, which subagents are insta
 
 ### Picking a scope: `here` / `everywhere`
 
-`add`, `init`, `list`, `remove`, `update`, and `doctor` take an optional
+`add`, `init`, `list`, `remove`, `update`, `share`, and `doctor` take an optional
 location keyword as a plain positional word — a friendlier alias for the
 `--project` / `--global` flags:
 
@@ -609,6 +639,7 @@ bmo add owner/repo here          # install into this project
 bmo add owner/repo everywhere    # install globally (same as the default)
 bmo list here                    # list only this project's skills
 bmo remove cool-skill here       # remove from this project
+bmo remove cool-skill everywhere # remove every copy bmo can reach
 bmo update here                  # update this project's skills
 ```
 
@@ -619,8 +650,9 @@ keyword or flag is given (`bmo list` with neither still lists both scopes). The
 interchangeably; a contradictory pairing (`bmo list everywhere --project`) is
 rejected rather than silently resolved.
 
-One exception: on `update`, `everywhere` reaches further than the global scope —
-it also updates every registered project repo. See
+One exception: on `remove`, `update`, and `share`, `everywhere` reaches further
+than the global scope — it also visits every registered project repo. See
+[`bmo remove everywhere`](#bmo-remove-everywhere-every-copy-at-once) and
 [`bmo update everywhere`](#bmo-update-everywhere-every-repo-at-once).
 
 ### Naming a harness positionally
@@ -637,9 +669,10 @@ bmo remove cool-skill codex      # remove from Codex
 bmo doctor codex                 # diagnose Codex's destinations
 ```
 
-`everyone` is only meaningful for `add`, which installs to every detected
-harness at once; the other commands act on one harness and reject it with an
-explanation. A positional harness cannot be combined with `--harness` or
+`everyone` is meaningful for the commands that fan out across harnesses: `add`
+installs to every detected one, while `remove`, `update`, and `share` sweep
+every harness's destinations. `init`, `list`, and `doctor` act on one harness
+and reject it with an explanation. A positional harness cannot be combined with `--harness` or
 `--skills-dir`. Positional names match case-insensitively, exactly like
 `--harness`.
 
@@ -666,7 +699,7 @@ Additional hardening:
 - **Zip-slip protection** — entries in downloaded archives that resolve outside the extraction directory are rejected.
 - **Size caps** — downloads and extracted archives are bounded (256 MiB) to guard against decompression bombs.
 - **No symlink following** — `bmo` refuses to copy symlinks when installing a skill, so a skill folder can't read files outside its tree.
-- **Scoped removal** — `bmo remove` refuses to delete anything outside the managed skills directory, and deletes only the subagent files recorded in metadata.
+- **Scoped removal** — `bmo remove` never deletes anything outside the managed skills directory, even when metadata records a path elsewhere, and deletes only the subagent files recorded in metadata.
 - **No silent subagent takeover** — installing over a subagent bmo didn't write requires `--force`, so one skill can't quietly replace another's specialist.
 
 ---

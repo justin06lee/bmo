@@ -247,3 +247,103 @@ func TestWithinDir(t *testing.T) {
 		})
 	}
 }
+
+// A project moved after installation leaves metadata pointing outside the
+// destination bmo now resolves. The copy really sitting in the skills
+// directory is the one to delete — the recorded path is never touched.
+func TestRemoveDeletesTheRelocatedCopy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	project := t.TempDir()
+	target, err := ResolveTarget("", ScopeProject, project, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := filepath.Join(target.SkillsDir, "demo")
+	writeSkill(t, installed, "demo")
+	// Somewhere else entirely: where the project used to live.
+	stale := filepath.Join(t.TempDir(), "old", "skills", "demo")
+	writeSkill(t, stale, "demo")
+
+	meta := EmptyMetadata()
+	meta.Skills["demo"] = SkillMeta{Name: "demo", Scope: ScopeProject, InstalledPath: stale}
+	if err := WriteMetadata(target.MetadataPath, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RemoveSkillFromTarget("demo", target); err != nil {
+		t.Fatalf("relocated removal failed: %v", err)
+	}
+	if _, err := os.Stat(installed); !os.IsNotExist(err) {
+		t.Fatalf("expected the copy inside the skills directory to be deleted, got %v", err)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("the recorded path is outside the skills directory and must survive: %v", err)
+	}
+	after, err := ReadMetadata(target.MetadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := after.Skills["demo"]; ok {
+		t.Fatal("expected the metadata entry to be dropped")
+	}
+}
+
+// With nothing left inside the skills directory, the entry is the only thing
+// still calling the skill installed. It is untracked, and nothing outside the
+// managed directory is deleted to get there.
+func TestRemoveUntracksAnEntryWithNoCopyLeft(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	target, err := ResolveTarget("", ScopeGlobal, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "elsewhere")
+	writeSkill(t, outside, "demo")
+	meta := EmptyMetadata()
+	meta.Skills["demo"] = SkillMeta{Name: "demo", Scope: ScopeGlobal, InstalledPath: outside}
+	if err := WriteMetadata(target.MetadataPath, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RemoveSkillFromTarget("demo", target); err != nil {
+		t.Fatalf("stale-entry removal failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "SKILL.md")); err != nil {
+		t.Fatalf("files outside the skills directory must never be deleted: %v", err)
+	}
+	after, err := ReadMetadata(target.MetadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := after.Skills["demo"]; ok {
+		t.Fatal("expected the stale entry to be dropped")
+	}
+}
+
+// A symlink in the skills directory is not a skill bmo installed, and
+// following it would reach outside the managed directory after all.
+func TestTrackedSkillPathRefusesASymlinkedRelocation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	target, err := ResolveTarget("", ScopeGlobal, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(t.TempDir(), "real")
+	writeSkill(t, real, "demo")
+	if err := os.MkdirAll(target.SkillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(target.SkillsDir, "demo")); err != nil {
+		t.Fatal(err)
+	}
+	entry := SkillMeta{Name: "demo", InstalledPath: filepath.Join(t.TempDir(), "gone", "demo")}
+	if path, ok := TrackedSkillPath("demo", entry, target); ok {
+		t.Fatalf("TrackedSkillPath followed a symlink to %q", path)
+	}
+}
