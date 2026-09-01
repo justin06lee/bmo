@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -35,18 +36,59 @@ type HarnessInfo struct {
 	GlobalDir    string
 	Executable   string
 	DetectionDir string
+	DesktopApps  []string
 }
 
 var harnesses = map[Harness]HarnessInfo{
-	HarnessClaude:   {HarnessClaude, "Claude Code", ".claude/skills", ".claude/skills", "claude", ".claude"},
-	HarnessCodex:    {HarnessCodex, "Codex and cross-harness Agent Skills", ".agents/skills", ".agents/skills", "codex", ".codex"},
-	HarnessCursor:   {HarnessCursor, "Cursor", ".cursor/skills", ".cursor/skills", "cursor", ".cursor"},
-	HarnessGemini:   {HarnessGemini, "Gemini CLI", ".gemini/skills", ".gemini/skills", "gemini", ".gemini"},
-	HarnessCopilot:  {HarnessCopilot, "GitHub Copilot", ".github/skills", ".copilot/skills", "copilot", ".copilot"},
-	HarnessWindsurf: {HarnessWindsurf, "Windsurf", ".windsurf/skills", ".codeium/windsurf/skills", "windsurf", ".codeium/windsurf"},
-	HarnessOpenCode: {HarnessOpenCode, "OpenCode", ".opencode/skills", ".config/opencode/skills", "opencode", ".config/opencode"},
-	HarnessAmp:      {HarnessAmp, "Amp", ".agents/skills", ".config/agents/skills", "amp", ".config/amp"},
-	HarnessCline:    {HarnessCline, "Cline", ".cline/skills", ".cline/skills", "cline", ".cline"},
+	HarnessClaude: {
+		Name: HarnessClaude, Description: "Claude Code and Claude desktop",
+		ProjectDir: ".claude/skills", GlobalDir: ".claude/skills",
+		Executable: "claude", DetectionDir: ".claude", DesktopApps: []string{"Claude.app"},
+	},
+	HarnessCodex: {
+		Name: HarnessCodex, Description: "ChatGPT and Codex (alias: chatgpt)",
+		ProjectDir: ".agents/skills", GlobalDir: ".agents/skills",
+		Executable: "codex", DetectionDir: ".codex", DesktopApps: []string{"ChatGPT.app", "Codex.app"},
+	},
+	HarnessCursor: {
+		Name: HarnessCursor, Description: "Cursor",
+		ProjectDir: ".cursor/skills", GlobalDir: ".cursor/skills",
+		Executable: "cursor", DetectionDir: ".cursor", DesktopApps: []string{"Cursor.app"},
+	},
+	HarnessGemini: {
+		Name: HarnessGemini, Description: "Gemini CLI",
+		ProjectDir: ".gemini/skills", GlobalDir: ".gemini/skills",
+		Executable: "gemini", DetectionDir: ".gemini",
+	},
+	HarnessCopilot: {
+		Name: HarnessCopilot, Description: "GitHub Copilot",
+		ProjectDir: ".github/skills", GlobalDir: ".copilot/skills",
+		Executable: "copilot", DetectionDir: ".copilot",
+	},
+	HarnessWindsurf: {
+		Name: HarnessWindsurf, Description: "Windsurf",
+		ProjectDir: ".windsurf/skills", GlobalDir: ".codeium/windsurf/skills",
+		Executable: "windsurf", DetectionDir: ".codeium/windsurf", DesktopApps: []string{"Windsurf.app"},
+	},
+	HarnessOpenCode: {
+		Name: HarnessOpenCode, Description: "OpenCode",
+		ProjectDir: ".opencode/skills", GlobalDir: ".config/opencode/skills",
+		Executable: "opencode", DetectionDir: ".config/opencode",
+	},
+	HarnessAmp: {
+		Name: HarnessAmp, Description: "Amp",
+		ProjectDir: ".agents/skills", GlobalDir: ".config/agents/skills",
+		Executable: "amp", DetectionDir: ".config/amp",
+	},
+	HarnessCline: {
+		Name: HarnessCline, Description: "Cline",
+		ProjectDir: ".cline/skills", GlobalDir: ".cline/skills",
+		Executable: "cline", DetectionDir: ".cline",
+	},
+}
+
+var harnessAliases = map[string]Harness{
+	"chatgpt": HarnessCodex,
 }
 
 // Harnesses returns the built-in presets in stable name order.
@@ -65,9 +107,13 @@ func ParseHarness(name string) (Harness, error) {
 	if name == "" {
 		return HarnessClaude, nil
 	}
-	harness := Harness(strings.ToLower(strings.TrimSpace(name)))
+	selector := strings.ToLower(strings.TrimSpace(name))
+	if canonical, ok := harnessAliases[selector]; ok {
+		return canonical, nil
+	}
+	harness := Harness(selector)
 	if _, ok := harnesses[harness]; !ok {
-		return "", fmt.Errorf("unknown harness %q (choose one of: %s, or use --skills-dir)", name, strings.Join(HarnessNames(), ", "))
+		return "", fmt.Errorf("unknown harness %q (choose one of: %s, or use --skills-dir)", name, strings.Join(HarnessSelectors(), ", "))
 	}
 	return harness, nil
 }
@@ -82,12 +128,60 @@ func HarnessNames() []string {
 	return names
 }
 
+// HarnessSelectors returns every accepted harness token, including aliases,
+// without adding aliases to loops that must visit each physical preset once.
+func HarnessSelectors() []string {
+	selectors := HarnessNames()
+	for alias := range harnessAliases {
+		selectors = append(selectors, alias)
+	}
+	sort.Strings(selectors)
+	return selectors
+}
+
+type detectionEnvironment struct {
+	home            string
+	applicationDirs []string
+	lookPath        func(string) (string, error)
+	getenv          func(string) string
+	dirExists       func(string) bool
+}
+
 // DetectedHarnesses returns harnesses that appear to be installed on this
-// machine. A harness is detected when its CLI is on PATH or its user config
-// directory already exists. The order is stable and favors Codex for the
-// shared .agents/skills destination.
+// machine. A harness is detected when its CLI is on PATH, its user config
+// directory already exists, or a supported macOS desktop app is installed.
+// The order is stable and favors Codex for the shared .agents/skills
+// destination.
 func DetectedHarnesses() []HarnessInfo {
 	home, _ := os.UserHomeDir()
+	applicationDirs := []string{}
+	// The override keeps embedding applications and tests from accidentally
+	// detecting app bundles outside the filesystem they intend to inspect.
+	if configured, overridden := os.LookupEnv("BMO_APPLICATIONS_DIRS"); overridden {
+		for _, dir := range filepath.SplitList(configured) {
+			if dir != "" {
+				applicationDirs = append(applicationDirs, dir)
+			}
+		}
+	} else if runtime.GOOS == "darwin" {
+		applicationDirs = append(applicationDirs, "/Applications")
+		if home != "" {
+			applicationDirs = append(applicationDirs, filepath.Join(home, "Applications"))
+		}
+	}
+	return detectedHarnesses(detectionEnvironment{
+		home:            home,
+		applicationDirs: applicationDirs,
+		lookPath:        exec.LookPath,
+		getenv:          os.Getenv,
+		dirExists: func(path string) bool {
+			stat, err := os.Stat(path)
+			return err == nil && stat.IsDir()
+		},
+	})
+}
+
+func detectedHarnesses(environment detectionEnvironment) []HarnessInfo {
 	order := []Harness{
 		HarnessCodex, HarnessClaude, HarnessCursor, HarnessGemini,
 		HarnessCopilot, HarnessWindsurf, HarnessOpenCode, HarnessAmp, HarnessCline,
@@ -95,28 +189,34 @@ func DetectedHarnesses() []HarnessInfo {
 	var detected []HarnessInfo
 	for _, harness := range order {
 		info := harnesses[harness]
-		_, executableErr := exec.LookPath(info.Executable)
+		_, executableErr := environment.lookPath(info.Executable)
 		configExists := false
-		if home != "" {
-			if stat, err := os.Stat(filepath.Join(home, filepath.FromSlash(info.DetectionDir))); err == nil && stat.IsDir() {
+		if environment.home != "" {
+			configExists = environment.dirExists(filepath.Join(environment.home, filepath.FromSlash(info.DetectionDir)))
+		}
+		if harness == HarnessClaude {
+			if dir := environment.getenv("CLAUDE_CONFIG_DIR"); dir != "" && environment.dirExists(dir) {
 				configExists = true
 			}
 		}
-		if harness == HarnessClaude {
-			if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-				if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
-					configExists = true
-				}
-			}
-		}
 		if harness == HarnessCodex {
-			if dir := os.Getenv("CODEX_HOME"); dir != "" {
-				if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
-					configExists = true
-				}
+			if dir := environment.getenv("CODEX_HOME"); dir != "" && environment.dirExists(dir) {
+				configExists = true
 			}
 		}
-		if executableErr == nil || configExists {
+		desktopExists := false
+		for _, applicationsDir := range environment.applicationDirs {
+			for _, app := range info.DesktopApps {
+				if environment.dirExists(filepath.Join(applicationsDir, app)) {
+					desktopExists = true
+					break
+				}
+			}
+			if desktopExists {
+				break
+			}
+		}
+		if executableErr == nil || configExists || desktopExists {
 			detected = append(detected, info)
 		}
 	}
@@ -128,6 +228,7 @@ func DetectedHarnesses() []HarnessInfo {
 // one harness while recording ownership in another harness's metadata.
 type Target struct {
 	Harness      Harness
+	RequestedAs  string
 	Scope        Scope
 	SkillsDir    string
 	MetadataPath string
@@ -172,6 +273,10 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 		return Target{}, err
 	}
 	info := harnesses[harness]
+	requestedAs := strings.ToLower(strings.TrimSpace(harnessName))
+	if requestedAs == "" {
+		requestedAs = string(harness)
+	}
 	var skillsDir string
 	if scope == ScopeProject {
 		skillsDir = filepath.Join(cwd, filepath.FromSlash(info.ProjectDir))
@@ -208,7 +313,7 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 		return Target{}, err
 	}
 
-	target := Target{Harness: harness, Scope: scope, SkillsDir: skillsDir, MetadataPath: metadataPath}
+	target := Target{Harness: harness, RequestedAs: requestedAs, Scope: scope, SkillsDir: skillsDir, MetadataPath: metadataPath}
 	// Claude Code is the only preset whose bundled agent format bmo currently
 	// validates. Other harnesses use different schemas, so their agents/ folder
 	// remains a skill resource instead of being exported as live configuration.
@@ -223,6 +328,18 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 		target.AgentsDir = agentsDir
 	}
 	return target, nil
+}
+
+// DisplayHarness returns the user-selected alias when one was used while
+// keeping Target.Harness canonical for metadata and destination ownership.
+func (t Target) DisplayHarness() string {
+	if t.RequestedAs != "" {
+		return t.RequestedAs
+	}
+	if t.Harness == "" {
+		return string(HarnessClaude)
+	}
+	return string(t.Harness)
 }
 
 // SupportsAgents reports whether bmo can safely export bundled agent files for
@@ -257,6 +374,9 @@ func ValidateSkillForTarget(skill Skill, target Target) error {
 
 // InvocationHint returns a concise harness-specific way to invoke a skill.
 func (t Target) InvocationHint(name string) string {
+	if t.RequestedAs == "chatgpt" {
+		return "@" + name
+	}
 	switch t.Harness {
 	case HarnessCodex:
 		return "$" + name

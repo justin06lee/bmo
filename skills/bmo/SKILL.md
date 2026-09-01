@@ -1,6 +1,6 @@
 ---
 name: bmo
-description: Use when managing portable coding-agent skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade, or target Codex/Claude/Cursor/Gemini/Copilot/Windsurf/OpenCode/Amp/Cline) or when creating a bmo-compatible SKILL.md package.
+description: Use when managing portable coding-agent skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade, or target ChatGPT/Codex/Claude/Cursor/Gemini/Copilot/Windsurf/OpenCode/Amp/Cline) or when creating a bmo-compatible SKILL.md package.
 ---
 
 # bmo
@@ -29,7 +29,8 @@ user to run `go install github.com/justin06lee/bmo@latest`.
 
 ```bash
 bmo add SOURCE        # install a skill (and any subagents it bundles)
-bmo add SOURCE codex  # install into Codex's portable .agents/skills location
+bmo add SOURCE codex  # install into the shared Codex/ChatGPT .agents/skills location
+bmo add SOURCE chatgpt # alias for codex, with ChatGPT invocation guidance
 bmo add SOURCE gemini # install into Gemini CLI's native location
 bmo add SOURCE everyone # install into every detected harness on the machine
 bmo add SOURCE --all  # install every skill the source contains
@@ -58,7 +59,7 @@ form remains available for compatibility and is used by `init`, `list`,
 | Name | Project | Global |
 |------|---------|--------|
 | `claude` | `.claude/skills` | `~/.claude/skills` or `$CLAUDE_CONFIG_DIR/skills` |
-| `codex` | `.agents/skills` | `~/.agents/skills` |
+| `codex` (`chatgpt` alias) | `.agents/skills` | `~/.agents/skills` |
 | `cursor` | `.cursor/skills` | `~/.cursor/skills` |
 | `gemini` | `.gemini/skills` | `~/.gemini/skills` |
 | `copilot` | `.github/skills` | `~/.copilot/skills` |
@@ -67,13 +68,18 @@ form remains available for compatibility and is used by `init`, `list`,
 | `amp` | `.agents/skills` | `~/.config/agents/skills` |
 | `cline` | `.cline/skills` | `~/.cline/skills` |
 
-The Codex `.agents/skills` location is also a cross-harness convention read by
-many of the other presets. For any unlisted harness use `--skills-dir PATH`;
+The shared Codex/ChatGPT `.agents/skills` location is also a cross-harness
+convention read by many of the other presets. `chatgpt` resolves to canonical
+`codex` metadata so the two names cannot drift. Invoke a skill as `@name` in
+ChatGPT and `$name` in Codex. For any unlisted harness use `--skills-dir PATH`;
 do not combine it with `--harness`.
 
-Use `bmo add SOURCE everyone` to install into every harness whose executable is
-on `PATH` or whose user config directory already exists. bmo preflights every
-destination and writes shared directories only once.
+`everyone` detects a harness from its CLI, its user configuration directory,
+or a supported macOS desktop app. ChatGPT.app and Codex.app both select the
+same canonical `codex` destination. Detection never reads credentials.
+
+Use `bmo add SOURCE everyone` to install into every detected harness. bmo
+preflights every destination and writes shared directories only once.
 
 ### Source formats
 
@@ -184,7 +190,7 @@ subpath, or install the odd one out separately with `--name`.
   portable harnesses require it to match the declared frontmatter name
 - `--force` — replace an existing install of the same name (on `add`)
 - `--yes` — skip confirmation prompts; use for non-interactive runs
-- `--dry-run` — show what would happen without writing anything
+- `--dry-run` — show what would happen without writing anything; suppresses first-run bootstrap writes
 - `--json` — machine-readable output (on `list`)
 - positional `HARNESS` on `add` — use a built-in coding-harness preset
 - positional `everyone` on `add` — install to every detected harness

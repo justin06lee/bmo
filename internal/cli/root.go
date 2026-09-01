@@ -155,7 +155,7 @@ func newAddCommand(opts *options) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Installed %d subagents to %s: %s\n",
 					len(meta.Agents), target.AgentsDir, strings.Join(bmo.AgentNames(skill.Agents), ", "))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "\nUse it in %s:\n  %s\n", target.Harness, target.InvocationHint(meta.Name))
+			fmt.Fprintf(cmd.OutOrStdout(), "\nUse it in %s:\n  %s\n", target.DisplayHarness(), target.InvocationHint(meta.Name))
 			return nil
 		},
 	}
@@ -504,7 +504,7 @@ func detectedHarnessCount(targets []detectedTarget) int {
 
 func printBatchPreview(cmd *cobra.Command, skills []bmo.Skill, source string, target bmo.Target, skillsDir, agentsDir string) {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "Found %d skills\n\nSource: %s\nHarness: %s\nScope: %s\nDestination: %s\n", len(skills), source, target.Harness, target.Scope, skillsDir)
+	fmt.Fprintf(out, "Found %d skills\n\nSource: %s\nHarness: %s\nScope: %s\nDestination: %s\n", len(skills), source, target.DisplayHarness(), target.Scope, skillsDir)
 	totalAgents, withExecutables := 0, 0
 	for _, skill := range skills {
 		totalAgents += len(skill.Agents)
@@ -585,7 +585,7 @@ func newInitCommand(opts *options) *cobra.Command {
 				return err
 			}
 			markBootstrappedFor(target.Harness)
-			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in %s:\n  %s\n", meta.Name, meta.InstalledPath, target.Harness, target.InvocationHint(meta.Name))
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in %s:\n  %s\n", meta.Name, meta.InstalledPath, target.DisplayHarness(), target.InvocationHint(meta.Name))
 			return nil
 		},
 	}
@@ -950,7 +950,7 @@ const everyoneKeyword = "everyone"
 // tokens stay positional instead.
 func splitKeywords(args []string, minArgs int) (rest []string, scopeKeyword, harnessKeyword string, err error) {
 	harnessNames := map[string]bool{everyoneKeyword: true}
-	for _, name := range bmo.HarnessNames() {
+	for _, name := range bmo.HarnessSelectors() {
 		harnessNames[name] = true
 	}
 	// Counted up front so the outcome does not depend on argument order.
@@ -1117,7 +1117,7 @@ func selectSkill(root, name string) (bmo.Skill, error) {
 }
 
 func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, target bmo.Target, dest string) {
-	fmt.Fprintf(cmd.OutOrStdout(), "Found skill: %s\nDescription: %s\n\nSource: %s\nHarness: %s\nScope: %s\nDestination: %s\nFiles: %d\n", skill.Name, skill.Description, source, target.Harness, target.Scope, dest, skill.FileCount)
+	fmt.Fprintf(cmd.OutOrStdout(), "Found skill: %s\nDescription: %s\n\nSource: %s\nHarness: %s\nScope: %s\nDestination: %s\nFiles: %d\n", skill.Name, skill.Description, source, target.DisplayHarness(), target.Scope, dest, skill.FileCount)
 	if skill.IgnoreRules > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Excludes: %d .bmoignore rules applied\n", skill.IgnoreRules)
 	}
@@ -1197,7 +1197,7 @@ func shouldBootstrap(cmd *cobra.Command, args []string) bool {
 // `bmo remove bmo` sticks. All failures are non-fatal — bmo should still run
 // without it.
 func bootstrapBmoSkillForOptions(cmd *cobra.Command, args []string, opts *options) {
-	if opts.skillsDir != "" {
+	if opts.skillsDir != "" || opts.dryRun {
 		return
 	}
 	harnessName := opts.harness

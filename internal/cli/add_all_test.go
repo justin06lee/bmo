@@ -16,6 +16,7 @@ func runBmo(t *testing.T, home string, args ...string) (string, error) {
 	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("BMO_APPLICATIONS_DIRS", t.TempDir())
 	cmd := NewRootCommand()
 	out := &bytes.Buffer{}
 	cmd.SetOut(out)
@@ -233,6 +234,7 @@ func TestDetectedProjectTargetsDeduplicateSharedAgentsDirectory(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("BMO_APPLICATIONS_DIRS", t.TempDir())
 	for _, dir := range []string{".codex", ".config/amp"} {
 		if err := os.MkdirAll(filepath.Join(home, filepath.FromSlash(dir)), 0o755); err != nil {
 			t.Fatal(err)

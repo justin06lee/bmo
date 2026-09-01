@@ -71,6 +71,7 @@ func TestSplitKeywords(t *testing.T) {
 		{name: "keyword only", args: []string{"here"}, wantScope: "here"},
 		{name: "empty args", args: nil},
 		{name: "harness after a required name", args: []string{"demo", "codex"}, minArgs: 1, wantRest: []string{"demo"}, wantHarness: "codex"},
+		{name: "chatgpt alias after a required name", args: []string{"demo", "chatgpt"}, minArgs: 1, wantRest: []string{"demo"}, wantHarness: "chatgpt"},
 		{name: "harness before a required name", args: []string{"codex", "demo"}, minArgs: 1, wantRest: []string{"demo"}, wantHarness: "codex"},
 		// Stripping the token would leave the command without its required
 		// argument, so it is the skill's name.
@@ -331,6 +332,62 @@ func TestInitInstallsBundledSkillForCodex(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", bmo.EmbeddedSkillName)); !os.IsNotExist(err) {
 		t.Fatalf("Codex init should not install into Claude: %v", err)
+	}
+}
+
+func TestInitAcceptsChatGPTAlias(t *testing.T) {
+	home := isolateHome(t)
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"init", "chatgpt"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	installed := filepath.Join(home, ".agents", "skills", bmo.EmbeddedSkillName, "SKILL.md")
+	if _, err := os.Stat(installed); err != nil {
+		t.Fatalf("expected ChatGPT alias to install at the shared Codex path: %v", err)
+	}
+}
+
+func TestChatGPTAliasUsesChatGPTInvocationHint(t *testing.T) {
+	home := isolateHome(t)
+	source := t.TempDir()
+	writeSourceSkill(t, source, "alpha")
+
+	out, err := runBmo(t, home, "add", source, "chatgpt", "--yes")
+	if err != nil {
+		t.Fatalf("ChatGPT install failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Harness: chatgpt") || !strings.Contains(out, "@alpha") {
+		t.Fatalf("ChatGPT alias did not retain its surface-specific guidance:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bmo", "codex-skills.json")); err != nil {
+		t.Fatalf("ChatGPT alias did not use canonical Codex metadata: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bmo", "chatgpt-skills.json")); !os.IsNotExist(err) {
+		t.Fatalf("ChatGPT alias created split metadata: %v", err)
+	}
+}
+
+func TestDryRunDoesNotBootstrapOrWrite(t *testing.T) {
+	home := isolateHome(t)
+	source := t.TempDir()
+	writeSourceSkill(t, source, "alpha")
+
+	out, err := runBmo(t, home, "add", source, "codex", "--dry-run", "--yes")
+	if err != nil {
+		t.Fatalf("dry run failed: %v\n%s", err, out)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".bmo", ".bootstrapped-codex"),
+		filepath.Join(home, ".bmo", "codex-skills.json"),
+		filepath.Join(home, ".agents", "skills", bmo.EmbeddedSkillName),
+		filepath.Join(home, ".agents", "skills", "alpha"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("--dry-run wrote %s: %v\n%s", path, statErr, out)
+		}
 	}
 }
 

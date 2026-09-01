@@ -23,7 +23,8 @@ bmo upgrade    # upgrade bmo itself to the latest release
 bmo add owner/repo here         # install into this project
 bmo add owner/repo everywhere   # install globally (the default)
 
-bmo add owner/repo codex          # Codex + portable .agents/skills
+bmo add owner/repo codex          # Codex + ChatGPT via portable .agents/skills
+bmo add owner/repo chatgpt        # alias for the same shared destination
 bmo add owner/repo gemini         # Gemini CLI's native directory
 bmo add owner/repo everyone       # every detected coding harness
 bmo add owner/repo --skills-dir PATH  # any other coding harness
@@ -34,7 +35,7 @@ bmo add bmo    # ...or restore it if you deleted it
 
 ## What It Does
 
-`bmo` installs standalone [Agent Skills](https://agentskills.io). A skill is a folder containing a `SKILL.md` file. Built-in presets support Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, Amp, and Cline; `--skills-dir` supports any other harness that reads the same open format.
+`bmo` installs standalone [Agent Skills](https://agentskills.io). A skill is a folder containing a `SKILL.md` file. Built-in presets support ChatGPT/Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, Amp, and Cline; `--skills-dir` supports any other harness that reads the same open format.
 
 It resolves a source (GitHub repo, local path, or zip URL), finds installable skill folders, validates the `SKILL.md` frontmatter, copies the selected folder into the target harness's skills directory, and records metadata so the skill can be listed, updated, or removed later.
 
@@ -114,8 +115,11 @@ bmo add owner/repo --all
 # Install to the current project instead
 bmo add --project owner/repo
 
-# Install for Codex. Its .agents/skills path is also read by several harnesses.
+# Install for Codex and ChatGPT. Their .agents/skills path is also read by several harnesses.
 bmo add owner/repo codex
+
+# The ChatGPT spelling selects the same destination and metadata.
+bmo add owner/repo chatgpt
 
 # Install into every coding harness detected on this machine
 bmo add owner/repo everyone
@@ -162,7 +166,7 @@ bmo add [here|everywhere] SOURCE [HARNESS|everyone] [--all] [--project | --globa
 | `--name` | Override the skill name for legacy Claude installs (portable harnesses require it to match the declared frontmatter name); cannot be combined with `--all` |
 | `--force` | Overwrite an existing installation with the same name, or a subagent bmo doesn't own |
 | `--yes` | Skip all confirmation prompts |
-| `--dry-run` | Show what would be installed without writing anything |
+| `--dry-run` | Show what would be installed without writing anything; first-run bootstrapping is suppressed |
 
 **Installing a whole suite.** When a repository ships a set of skills meant to be used together, `--all` installs them in one command:
 
@@ -201,7 +205,7 @@ bmo add everywhere owner/repo everyone --all --yes
 bmo add here owner/repo everyone
 ```
 
-`everyone` detects harnesses whose CLI is on `PATH` or whose user configuration directory already exists. It preflights every destination, asks once, and installs only to detected harnesses. Destinations shared by multiple harnesses—such as the project-level `.agents/skills` used by Codex and Amp—are written once. If a destination fails partway through, the copies already written are rolled back so a plain retry works without `--force`.
+`everyone` detects harnesses whose CLI is on `PATH`, whose user configuration directory already exists, or whose supported macOS desktop app is installed. ChatGPT.app and Codex.app both select the canonical `codex` destination. It preflights every destination, asks once, and installs only to detected harnesses. Destinations shared by multiple harnesses—such as the project-level `.agents/skills` used by Codex and Amp—are written once. If a destination fails partway through, the copies already written are rolled back so a plain retry works without `--force`.
 
 ### `init`
 
@@ -351,7 +355,7 @@ Claude remains the default for backward compatibility. On `add`, put the harness
 | Harness | Project skills | Global skills |
 |---------|----------------|---------------|
 | `claude` | `.claude/skills/` | `$CLAUDE_CONFIG_DIR/skills/` or `~/.claude/skills/` |
-| `codex` | `.agents/skills/` | `~/.agents/skills/` |
+| `codex` (`chatgpt` alias) | `.agents/skills/` | `~/.agents/skills/` |
 | `cursor` | `.cursor/skills/` | `~/.cursor/skills/` |
 | `gemini` | `.gemini/skills/` | `~/.gemini/skills/` |
 | `copilot` | `.github/skills/` | `~/.copilot/skills/` |
@@ -360,7 +364,9 @@ Claude remains the default for backward compatibility. On `add`, put the harness
 | `amp` | `.agents/skills/` | `~/.config/agents/skills/` |
 | `cline` | `.cline/skills/` | `~/.cline/skills/` |
 
-Run `bmo harnesses` to print this table from the installed binary. The `codex` project and global locations use the cross-harness `.agents/skills` convention, which is also discovered by Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, and Amp. For a new or private harness, `--skills-dir PATH` uses the exact directory you provide and stores `bmo-lock.json` beside it.
+Run `bmo harnesses` to print this table from the installed binary. `chatgpt` is an alias for `codex`: both use the same files and canonical `codex` metadata, so installs cannot drift or be removed out from under one another. Invoke an installed skill as `@name` in ChatGPT and `$name` in Codex. The shared project and global locations use the cross-harness `.agents/skills` convention, which is also discovered by Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, and Amp. For a new or private harness, `--skills-dir PATH` uses the exact directory you provide and stores `bmo-lock.json` beside it.
+
+Detection is path-based and does not read credentials. In addition to CLI and configuration-directory detection, macOS recognizes Claude.app, Cursor.app, Windsurf.app, and either ChatGPT.app or Codex.app. A broken CLI does not prevent BMO from installing files for a working desktop app.
 
 Each distinct destination has its own metadata. Global non-Claude metadata lives at `~/.bmo/<harness>-skills.json`; project metadata lives beside that harness's `skills/` directory. Presets that intentionally share `.agents/skills` also share the physical project install—one copy serves every harness that discovers that directory.
 
@@ -486,6 +492,7 @@ the arguments — a friendlier alias for `--harness`:
 
 ```bash
 bmo init codex                   # install the bundled skill for Codex
+bmo init chatgpt                 # same files, with ChatGPT invocation guidance
 bmo list here codex              # this project's Codex skills
 bmo update codex                 # every skill tracked for Codex
 bmo remove cool-skill codex      # remove from Codex

@@ -1,6 +1,7 @@
 package bmo
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,22 +70,78 @@ func TestResolveCustomTarget(t *testing.T) {
 	}
 }
 
+func TestChatGPTAliasResolvesToCodexTarget(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", home)
+
+	harness, err := ParseHarness("ChatGPT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if harness != HarnessCodex {
+		t.Fatalf("ParseHarness(chatgpt) = %q, want %q", harness, HarnessCodex)
+	}
+
+	target, err := ResolveTarget("chatgpt", ScopeGlobal, project, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Harness != HarnessCodex {
+		t.Fatalf("chatgpt target harness = %q, want canonical %q", target.Harness, HarnessCodex)
+	}
+	if want := filepath.Join(home, ".agents", "skills"); target.SkillsDir != want {
+		t.Fatalf("chatgpt skills dir = %q, want %q", target.SkillsDir, want)
+	}
+}
+
 func TestDetectedHarnessesUsesExecutablesAndConfigDirectories(t *testing.T) {
 	home := t.TempDir()
 	bin := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("PATH", bin)
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	t.Setenv("CODEX_HOME", "")
 	if err := os.MkdirAll(filepath.Join(home, ".gemini"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	detected := DetectedHarnesses()
+	detected := detectedHarnesses(detectionEnvironment{
+		home:            home,
+		applicationDirs: []string{t.TempDir()},
+		lookPath: func(name string) (string, error) {
+			if name == "codex" {
+				return filepath.Join(bin, name), nil
+			}
+			return "", errors.New("not found")
+		},
+		getenv: func(string) string { return "" },
+		dirExists: func(path string) bool {
+			stat, err := os.Stat(path)
+			return err == nil && stat.IsDir()
+		},
+	})
 	if len(detected) != 2 || detected[0].Name != HarnessCodex || detected[1].Name != HarnessGemini {
 		t.Fatalf("detected harnesses = %+v, want codex then gemini", detected)
+	}
+}
+
+func TestDetectedHarnessesTreatsChatGPTDesktopAsCodex(t *testing.T) {
+	applications := t.TempDir()
+	if err := os.Mkdir(filepath.Join(applications, "ChatGPT.app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	detected := detectedHarnesses(detectionEnvironment{
+		home:            t.TempDir(),
+		applicationDirs: []string{applications},
+		lookPath:        func(string) (string, error) { return "", errors.New("not found") },
+		getenv:          func(string) string { return "" },
+		dirExists: func(path string) bool {
+			stat, err := os.Stat(path)
+			return err == nil && stat.IsDir()
+		},
+	})
+	if len(detected) != 1 || detected[0].Name != HarnessCodex {
+		t.Fatalf("detected harnesses = %+v, want desktop ChatGPT to select codex", detected)
 	}
 }
 
