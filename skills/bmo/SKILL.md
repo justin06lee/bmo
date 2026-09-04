@@ -50,7 +50,8 @@ bmo share everyone    # give every harness the union of everyone's skills
 bmo remove NAME       # uninstall a skill
 bmo remove NAME universe # delete every copy, every harness, every known project
 bmo doctor            # run diagnostics
-bmo init              # (re)install this bundled bmo skill
+bmo init              # (re)install this bundled bmo skill (claude by default)
+bmo init everyone     # (re)install it into every detected harness
 bmo harnesses         # list supported harness presets and paths
 bmo upgrade           # upgrade the bmo binary itself to the latest release
 bmo --version         # show the installed bmo version
@@ -164,8 +165,8 @@ bmo doctor codex               # diagnose Codex's destinations
 bmo share codex                # seed every other harness from Codex
 ```
 
-`everyone` works with `add`, `remove`, `update`, and `share` — the commands
-that fan out across harnesses. `init`, `list`, and `doctor` act on a single
+`everyone` works with `add`, `init`, `remove`, `update`, and `share` — the
+commands that fan out across harnesses. `list` and `doctor` act on a single
 harness and reject it with an explanation, as they reject `universe`. Positional harness names match
 case-insensitively, like `--harness`.
 

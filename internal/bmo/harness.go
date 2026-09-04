@@ -316,7 +316,7 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 	if scope == ScopeProject {
 		skillsDir = filepath.Join(cwd, filepath.FromSlash(info.ProjectDir))
 	} else if harness == HarnessClaude {
-		skillsDir, err = GlobalSkillsDir()
+		skillsDir, err = ClaudeGlobalSkillsDir()
 	} else if harness == HarnessGrok {
 		skillsDir, err = GrokGlobalSkillsDir()
 	} else {
@@ -333,9 +333,9 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 	var metadataPath string
 	if harness == HarnessClaude {
 		if scope == ScopeProject {
-			metadataPath = ProjectMetadataPath(cwd)
+			metadataPath = ClaudeProjectMetadataPath(cwd)
 		} else {
-			metadataPath, err = GlobalMetadataPath()
+			metadataPath, err = ClaudeGlobalMetadataPath()
 		}
 	} else if scope == ScopeProject {
 		metadataPath = filepath.Join(filepath.Dir(skillsDir), ProjectLockFileName)
@@ -378,7 +378,7 @@ func resolveAgentsDir(harness Harness, info HarnessInfo, scope Scope, cwd string
 	}
 	switch harness {
 	case HarnessClaude:
-		return GlobalAgentsDir()
+		return ClaudeGlobalAgentsDir()
 	case HarnessGrok:
 		return GrokGlobalAgentsDir()
 	}
@@ -421,13 +421,31 @@ func (t Target) AgentFormat() AgentFormat {
 	return AgentFormat{NameInFrontmatter: harnesses[t.Harness].AgentNameInFrontmatter}
 }
 
-// ValidateSkillForTarget enforces the portable common denominator for every
-// non-Claude harness while retaining Claude's historical extensions. A
+// RelaxesSkillValidation reports whether this target accepts skills the
+// portable rules would refuse. Only Claude does, and only for backward
+// compatibility: it accepted skills published before those rules existed, and
+// tightening it now would orphan installs people already depend on. A
 // zero-value harness is Claude Code, matching the rest of this package.
+//
+// The exemption is not free — a skill that only ever installed to Claude can
+// be refused the first time it is shared anywhere else — so `bmo doctor`
+// reports the skills it is currently covering.
+func (t Target) RelaxesSkillValidation() bool {
+	return t.Harness == HarnessClaude || t.Harness == ""
+}
+
+// ValidateSkillForTarget enforces the portable common denominator for every
+// harness that does not relax it.
 func ValidateSkillForTarget(skill Skill, target Target) error {
-	if target.Harness == HarnessClaude || target.Harness == "" {
+	if target.RelaxesSkillValidation() {
 		return nil
 	}
+	return ValidatePortableSkill(skill)
+}
+
+// ValidatePortableSkill applies the rules every harness bmo installs to has to
+// agree on, so one skill folder can be copied between them unchanged.
+func ValidatePortableSkill(skill Skill) error {
 	if skill.DeclaredName == "" {
 		return errors.New("portable harnesses require an explicit name in SKILL.md frontmatter")
 	}

@@ -99,6 +99,7 @@ func scopeChecks(label string, target Target) []DoctorCheck {
 		checkMetadata(label+" metadata", target.MetadataPath),
 	}
 	checks = append(checks, checkMetadataEntries(target.MetadataPath)...)
+	checks = append(checks, checkPortability(target)...)
 	checks = append(checks, checkAgentsForTargets(target)...)
 	return checks
 }
@@ -111,7 +112,47 @@ func RunDoctorForTarget(target Target) []DoctorCheck {
 		checkMetadata("Metadata", target.MetadataPath),
 	}
 	checks = append(checks, checkMetadataEntries(target.MetadataPath)...)
+	checks = append(checks, checkPortability(target)...)
 	checks = append(checks, checkAgentsForTargets(target)...)
+	return checks
+}
+
+// checkPortability reports skills a relaxed target accepted that no other
+// harness would. The install succeeded and the skill works where it is, but
+// `bmo share` skips exactly these, so naming them here turns a silent
+// difference into something the user runs into later without explanation.
+func checkPortability(target Target) []DoctorCheck {
+	if !target.RelaxesSkillValidation() {
+		return nil
+	}
+	meta, err := ReadMetadata(target.MetadataPath)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	reasons := map[string]string{}
+	for name, entry := range meta.Skills {
+		skill, err := ValidateSkill(entry.InstalledPath, "")
+		if err != nil {
+			// A skill that will not load at all is already reported by
+			// checkMetadataEntries; do not say it twice in different words.
+			continue
+		}
+		if err := ValidatePortableSkill(skill); err != nil {
+			names = append(names, name)
+			reasons[name] = err.Error()
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	checks := make([]DoctorCheck, 0, len(names))
+	for _, name := range names {
+		checks = append(checks, DoctorCheck{DoctorWarning, fmt.Sprintf(
+			"Skill %s works in %s but no other harness will accept it (%s scope): %s",
+			name, target.DisplayHarness(), target.Scope, reasons[name])})
+	}
 	return checks
 }
 

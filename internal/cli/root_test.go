@@ -126,7 +126,7 @@ func TestSplitHarnessKeywordsRejectsEveryone(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, _, err := splitHarnessKeywords(tc.args, tc.minArgs)
-			if err == nil || !strings.Contains(err.Error(), "bmo add, bmo remove, bmo update, and bmo share") {
+			if err == nil || !strings.Contains(err.Error(), "bmo add, bmo init, bmo remove, bmo update, and bmo share") {
 				t.Fatalf("splitHarnessKeywords(%v, %d) error = %v, want the everyone explanation", tc.args, tc.minArgs, err)
 			}
 		})
@@ -221,7 +221,7 @@ func TestListEntriesSorted(t *testing.T) {
 	isolateHome(t)
 	cwd := t.TempDir()
 
-	globalPath, err := bmo.GlobalMetadataPath()
+	globalPath, err := bmo.ClaudeGlobalMetadataPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestListEntriesSorted(t *testing.T) {
 	}
 	project := bmo.EmptyMetadata()
 	project.Skills["beta"] = bmo.SkillMeta{Name: "beta", Scope: bmo.ScopeProject}
-	if err := bmo.WriteMetadata(bmo.ProjectMetadataPath(cwd), project); err != nil {
+	if err := bmo.WriteMetadata(bmo.ClaudeProjectMetadataPath(cwd), project); err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,7 +278,7 @@ func bootstrapForTest(cmd *cobra.Command) {
 // bundled skill.
 func bmoSkillTrackedGlobally(t *testing.T) bool {
 	t.Helper()
-	metaPath, err := bmo.GlobalMetadataPath()
+	metaPath, err := bmo.ClaudeGlobalMetadataPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,11 +500,11 @@ func TestHarnessAwareCommandsRejectBadArguments(t *testing.T) {
 	}{
 		{"doctor rejects a stray argument", []string{"doctor", "bogus-arg"}, "unknown command"},
 		{"list rejects a stray argument", []string{"list", "bogus-arg"}, "unknown command"},
-		{"init rejects everyone", []string{"init", "everyone"}, "bmo add, bmo remove, bmo update, and bmo share"},
-		{"list rejects everyone", []string{"list", "everyone"}, "bmo add, bmo remove, bmo update, and bmo share"},
+		{"list rejects everyone", []string{"list", "everyone"}, "bmo add, bmo init, bmo remove, bmo update, and bmo share"},
 		// remove requires a name, so "everyone" is read as the skill to remove.
 		{"remove reads everyone as the skill name", []string{"remove", "everyone"}, "not tracked"},
-		{"doctor rejects everyone", []string{"doctor", "everyone"}, "bmo add, bmo remove, bmo update, and bmo share"},
+		{"doctor rejects everyone", []string{"doctor", "everyone"}, "bmo add, bmo init, bmo remove, bmo update, and bmo share"},
+		{"init everyone rejects --harness", []string{"init", "everyone", "--harness", "codex"}, "already covers every harness"},
 		{"update everyone rejects --harness", []string{"update", "everyone", "--harness", "codex"}, "already covers every harness"},
 		{"share everyone rejects --harness", []string{"share", "everyone", "--harness", "codex"}, "already covers every harness"},
 		{"positional harness beside --harness", []string{"init", "codex", "--harness", "gemini"}, "cannot be combined"},
@@ -578,7 +578,7 @@ func TestBootstrapBmoSkillSkipsWhenTracked(t *testing.T) {
 	home := isolateHome(t)
 
 	// Pre-record the bmo skill in global metadata, without a marker file.
-	metaPath, err := bmo.GlobalMetadataPath()
+	metaPath, err := bmo.ClaudeGlobalMetadataPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -827,5 +827,55 @@ func TestUpdateEveryoneRejectsASingleDestination(t *testing.T) {
 				t.Fatalf("bmo update everyone %s error = %v, want a refusal\n%s", flag[0], err, out)
 			}
 		})
+	}
+}
+
+// `bmo init everyone` seeds the bundled skill into every detected harness. The
+// bmo skill is how a harness learns what bmo is, so leaving it Claude-only made
+// every other harness a second-class destination bmo itself never taught.
+func TestInitEveryoneInstallsToEveryDetectedHarness(t *testing.T) {
+	home := isolateHome(t)
+	project := t.TempDir()
+	t.Chdir(project)
+	// Detection is path-based: a user config directory is enough to count.
+	for _, dir := range []string{".claude", ".gemini", ".grok"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"init", "here", "everyone", "--yes"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("bmo init here everyone: %v", err)
+	}
+	for _, dir := range []string{".claude", ".gemini", ".grok"} {
+		skill := filepath.Join(project, dir, "skills", "bmo", "SKILL.md")
+		if _, err := os.Stat(skill); err != nil {
+			t.Fatalf("bmo skill missing for %s: %v", dir, err)
+		}
+	}
+}
+
+// A machine with no Claude at all still gets Claude as the default target, for
+// backward compatibility. That is defensible only if bmo says so, otherwise the
+// skill lands somewhere the user never looks.
+func TestInitNamesTheHarnessesItDidNotReach(t *testing.T) {
+	home := isolateHome(t)
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll(filepath.Join(home, ".gemini"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"init", "here"})
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "gemini") || !strings.Contains(out.String(), "bmo init everyone") {
+		t.Fatalf("init should point at the harnesses it skipped:\n%s", out.String())
 	}
 }

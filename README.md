@@ -223,7 +223,7 @@ bmo add here owner/repo everyone
 Install the `bmo` skill that ships bundled inside the binary.
 
 ```bash
-bmo init [--project | --global] [--harness NAME | --skills-dir PATH]
+bmo init [here|everywhere] [HARNESS|everyone] [--project | --global] [--harness NAME | --skills-dir PATH]
 ```
 
 | Flag | Description |
@@ -232,9 +232,24 @@ bmo init [--project | --global] [--harness NAME | --skills-dir PATH]
 | `--global` | Install into the target harness's global directory (the default) |
 | `--harness` | Target a built-in harness preset (default: `claude`) |
 | `--skills-dir` | Target an explicit skills directory |
+| `--yes` | Skip the confirmation `everyone` asks for |
 
 This is the explicit form of the first-run auto-install. It works offline and
 refreshes the skill if it's already installed. `bmo add bmo` does the same thing.
+
+`bmo init everyone` installs the bundled skill into every detected harness at
+once, using the same fan-out and the same preflight as `bmo add SOURCE everyone`:
+
+```bash
+bmo init everyone            # every detected harness, globally
+bmo init here everyone       # every detected harness, in this project
+bmo init grok                # one harness
+```
+
+Without a harness, `bmo init` targets `claude` — the backward-compatible
+default. On a machine running something else that would put the skill somewhere
+you never look, so init names the other harnesses it detected and points at
+`bmo init everyone`.
 
 ### `inspect`
 
@@ -498,6 +513,15 @@ legacy Claude skill with no `name:` in its frontmatter is rejected by the
 portable harnesses, and is reported as a skipped addition while the rest of the
 sync proceeds.
 
+Claude is the one preset that relaxes the portable rules, because it accepted
+skills published before those rules existed and tightening it now would orphan
+installs people depend on. That leniency is otherwise invisible until the first
+time you share, so `bmo doctor` reports the skills it is currently covering:
+
+```
+WARNING Skill Legacy_Skill works in claude but no other harness will accept it (global scope): portable harnesses require an explicit name in SKILL.md frontmatter
+```
+
 ### `doctor`
 
 Run system diagnostics.
@@ -514,6 +538,7 @@ Checks:
 - Harness-specific skill and metadata destinations
 - Metadata that tracks subagents a harness cannot host (the state `remove` refuses)
 - `CLAUDE_CONFIG_DIR` status when checking the Claude preset, and `GROK_HOME` status when checking Grok Build
+- Tracked skills a relaxed target accepted that no other harness will (see below)
 
 The `here` / `everywhere` keyword (or `--project` / `--global`) narrows the
 report to one scope. An unresolvable destination — say, no home directory — is
@@ -700,8 +725,8 @@ bmo doctor codex                 # diagnose Codex's destinations
 ```
 
 `everyone` is meaningful for the commands that fan out across harnesses: `add`
-installs to every detected one, while `remove`, `update`, and `share` sweep
-every harness's destinations. `init`, `list`, and `doctor` act on one harness
+and `init` install to every detected one, while `remove`, `update`, and `share`
+sweep every harness's destinations. `list` and `doctor` act on one harness
 and reject it with an explanation. A positional harness cannot be combined with `--harness` or
 `--skills-dir`. Positional names match case-insensitively, exactly like
 `--harness`.

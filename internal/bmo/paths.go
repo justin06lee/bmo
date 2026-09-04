@@ -12,7 +12,10 @@ const (
 	ScopeProject Scope = "project"
 )
 
-func GlobalSkillsDir() (string, error) {
+// ClaudeGlobalSkillsDir returns Claude Code's user-level skills directory.
+// Claude is the only preset whose global destination is not derived from
+// HarnessInfo.GlobalDir, because CLAUDE_CONFIG_DIR may move it.
+func ClaudeGlobalSkillsDir() (string, error) {
 	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		return filepath.Join(dir, "skills"), nil
 	}
@@ -23,7 +26,8 @@ func GlobalSkillsDir() (string, error) {
 	return filepath.Join(home, ".claude", "skills"), nil
 }
 
-func ProjectSkillsDir(cwd string) string {
+// ClaudeProjectSkillsDir returns Claude Code's project skills directory.
+func ClaudeProjectSkillsDir(cwd string) string {
 	return filepath.Join(cwd, ".claude", "skills")
 }
 
@@ -43,10 +47,12 @@ func GrokGlobalSkillsDir() (string, error) {
 	return filepath.Join(home, ".grok", "skills"), nil
 }
 
-// GlobalAgentsDir returns the directory Claude Code scans for global subagent
-// definitions. It sits beside the skills directory, which is why a skill's
-// bundled agents/ folder cannot simply be copied in place with the skill.
-func GlobalAgentsDir() (string, error) {
+// ClaudeGlobalAgentsDir returns the directory Claude Code scans for global
+// subagent definitions. It sits beside the skills directory, which is why a
+// skill's bundled agents/ folder cannot simply be copied in place with the
+// skill. Every other harness derives this from HarnessInfo.GlobalAgentsDir;
+// Claude needs its own because CLAUDE_CONFIG_DIR may move it.
+func ClaudeGlobalAgentsDir() (string, error) {
 	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		return filepath.Join(dir, "agents"), nil
 	}
@@ -57,7 +63,8 @@ func GlobalAgentsDir() (string, error) {
 	return filepath.Join(home, ".claude", "agents"), nil
 }
 
-func ProjectAgentsDir(cwd string) string {
+// ClaudeProjectAgentsDir returns Claude Code's project subagent directory.
+func ClaudeProjectAgentsDir(cwd string) string {
 	return filepath.Join(cwd, ".claude", "agents")
 }
 
@@ -75,15 +82,18 @@ func GrokGlobalAgentsDir() (string, error) {
 	return filepath.Join(home, ".grok", "agents"), nil
 }
 
-// AgentsDir resolves the subagent directory for a scope.
-func AgentsDir(scope Scope, cwd string) (string, error) {
+// ClaudeAgentsDir resolves Claude Code's subagent directory for a scope.
+func ClaudeAgentsDir(scope Scope, cwd string) (string, error) {
 	if scope == ScopeProject {
-		return ProjectAgentsDir(cwd), nil
+		return ClaudeProjectAgentsDir(cwd), nil
 	}
-	return GlobalAgentsDir()
+	return ClaudeGlobalAgentsDir()
 }
 
-func GlobalMetadataPath() (string, error) {
+// ClaudeGlobalMetadataPath is Claude's global metadata file. Every other
+// harness uses ~/.bmo/<harness>-skills.json; this unprefixed path predates the
+// harness abstraction and is preserved so existing installs stay tracked.
+func ClaudeGlobalMetadataPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -91,7 +101,10 @@ func GlobalMetadataPath() (string, error) {
 	return filepath.Join(home, ".bmo", "skills.json"), nil
 }
 
-func ProjectMetadataPath(cwd string) string {
+// ClaudeProjectMetadataPath is Claude's project lock file. Every other harness
+// writes ProjectLockFileName beside its own project skills directory; this path
+// is preserved for the same backward-compatibility reason.
+func ClaudeProjectMetadataPath(cwd string) string {
 	return filepath.Join(cwd, ".claude", ProjectLockFileName)
 }
 

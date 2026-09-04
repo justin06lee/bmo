@@ -556,19 +556,23 @@ func printExecutableWarning(out io.Writer, skills []bmo.Skill) {
 
 func newInitCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "init [here|everywhere] [HARNESS]",
+		Use:   "init [here|everywhere] [HARNESS|everyone]",
 		Short: "Install the bundled bmo skill into a coding harness",
 		Example: `  bmo init here
-  bmo init codex`,
+  bmo init codex
+  bmo init everyone`,
 		Args: argsWithKeywords(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			_, keyword, positionalHarness, err := splitHarnessKeywords(args, minPositionalArgs(cmd))
+			_, keyword, positionalHarness, err := splitKeywords(args, minPositionalArgs(cmd))
 			if err != nil {
 				return err
+			}
+			if positionalHarness == everyoneKeyword {
+				return initEveryone(cmd, keyword, cwd, opts)
 			}
 			effective, err := withPositionalHarness(opts, positionalHarness)
 			if err != nil {
@@ -588,14 +592,69 @@ func newInitCommand(opts *options) *cobra.Command {
 			}
 			markBootstrappedFor(target.Harness)
 			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in %s:\n  %s\n", meta.Name, meta.InstalledPath, target.DisplayHarness(), target.InvocationHint(meta.Name))
+			printOtherHarnessHint(cmd, target, effective)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into the harness's project skills directory")
 	cmd.Flags().BoolVar(&opts.global, "global", false, "Install into the harness's global skills directory")
+	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip interactive confirmation")
 	addHarnessFlags(cmd, opts)
 	cmd.MarkFlagsMutuallyExclusive("project", "global")
 	return cmd
+}
+
+// initEveryone installs the bundled bmo skill into every detected harness,
+// reusing the same fan-out `bmo add SOURCE everyone` performs so the two cannot
+// drift on which destinations count as detected or how shared ones are merged.
+// init refreshes rather than first-installs, so it forces.
+func initEveryone(cmd *cobra.Command, keyword, cwd string, opts *options) error {
+	if opts.harness != "" || opts.skillsDir != "" {
+		return errors.New(`"everyone" already covers every harness; drop --harness and --skills-dir`)
+	}
+	if err := keywordScopeConflict(keyword, opts); err != nil {
+		return err
+	}
+	src, err := bmo.ParseSource(bmo.EmbeddedSkillName)
+	if err != nil {
+		return err
+	}
+	resolved, err := bmo.ResolveSource(src)
+	if err != nil {
+		return err
+	}
+	defer cleanupResolved(resolved)
+	fanOut := *opts
+	fanOut.force = true
+	if err := addEveryone(cmd, resolved, keywordScope(keyword, opts), cwd, &fanOut); err != nil {
+		return err
+	}
+	// Every harness the fan-out reached has now had its one-time install, so
+	// none of them should seed the skill again behind a later command.
+	for _, info := range bmo.DetectedHarnesses() {
+		markBootstrappedFor(info.Name)
+	}
+	return nil
+}
+
+// printOtherHarnessHint names the harnesses a single-destination init did not
+// reach. bmo defaults to Claude when no harness is named, which on a machine
+// running something else would otherwise install the skill somewhere the user
+// never looks, with nothing said about it.
+func printOtherHarnessHint(cmd *cobra.Command, target bmo.Target, opts *options) {
+	if opts.harness != "" || opts.skillsDir != "" {
+		return
+	}
+	var others []string
+	for _, info := range bmo.DetectedHarnesses() {
+		if info.Name != target.Harness {
+			others = append(others, string(info.Name))
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "\nAlso detected: %s\nInstall there too with: bmo init everyone\n", strings.Join(others, ", "))
 }
 
 func newInspectCommand() *cobra.Command {
@@ -876,7 +935,7 @@ func selectedScope(opts *options) bmo.Scope {
 	return bmo.ScopeGlobal
 }
 
-// everyoneKeyword fans a command out across harnesses: add installs into every
+// everyoneKeyword fans a command out across harnesses: add and init install into every
 // detected one, remove and update sweep every one's destinations, and share
 // syncs between them. The commands that resolve a single destination reject it.
 const everyoneKeyword = "everyone"
@@ -1003,7 +1062,7 @@ func splitHarnessKeywords(args []string, minArgs int) (rest []string, scopeKeywo
 		return nil, "", "", err
 	}
 	if harnessKeyword == everyoneKeyword {
-		return nil, "", "", errors.New(`"everyone" fans out across harnesses and is only supported by bmo add, bmo remove, bmo update, and bmo share; run this command per harness instead (a skill literally named everyone is covered by the command's no-name form, e.g. a plain bmo list)`)
+		return nil, "", "", errors.New(`"everyone" fans out across harnesses and is only supported by bmo add, bmo init, bmo remove, bmo update, and bmo share; run this command per harness instead (a skill literally named everyone is covered by the command's no-name form, e.g. a plain bmo list)`)
 	}
 	return rest, scopeKeyword, harnessKeyword, nil
 }
@@ -1013,7 +1072,7 @@ func splitHarnessKeywords(args []string, minArgs int) (rest []string, scopeKeywo
 // share sweep every harness's destinations at once.
 func fansOutAcrossHarnesses(name string) bool {
 	switch name {
-	case "add", "remove", "update", "share":
+	case "add", "init", "remove", "update", "share":
 		return true
 	}
 	return false
