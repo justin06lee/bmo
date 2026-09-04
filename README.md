@@ -568,22 +568,39 @@ Both scopes can coexist. A skill name collision across scopes triggers a warning
 
 ### Subagents
 
-A skill may ship Claude Code subagents in an `agents/` folder. A subagent is a separate worker with its own context window, model, and tool allowlist, spawned by name and able to run in parallel — as opposed to a skill, which loads instructions into the current context.
+A skill may ship subagents in an `agents/` folder. A subagent is a separate worker with its own context window, model, and tool allowlist, spawned by name and able to run in parallel — as opposed to a skill, which loads instructions into the current context.
 
-Claude Code discovers subagents from its agents directory, beside the skills directory, so bmo installs them to a second destination that follows the same scope:
+A harness discovers subagents from its agents directory, beside the skills directory, so bmo installs them to a second destination that follows the same scope. Five presets have a Markdown subagent convention bmo has verified against their own documentation or source:
 
-| Scope | Skill | Subagents |
-|-------|-------|-----------|
-| Global | `~/.claude/skills/<name>/` (or `$CLAUDE_CONFIG_DIR/skills/`) | `~/.claude/agents/` (or `$CLAUDE_CONFIG_DIR/agents/`) |
-| Project | `<project-root>/.claude/skills/<name>/` | `<project-root>/.claude/agents/` |
+| Harness | Project subagents | Global subagents |
+|---------|-------------------|------------------|
+| `claude` | `.claude/agents/` | `$CLAUDE_CONFIG_DIR/agents/` or `~/.claude/agents/` |
+| `cursor` | `.cursor/agents/` | `~/.cursor/agents/` |
+| `gemini` | `.gemini/agents/` | `~/.gemini/agents/` |
+| `grok` | `.grok/agents/` | `$GROK_HOME/agents/` or `~/.grok/agents/` |
+| `opencode` | `.opencode/agents/` | `~/.config/opencode/agents/` |
+
+The rest — `codex`, `copilot`, `windsurf`, `amp`, `cline`, and any `--skills-dir` destination — keep the `agents/` folder as a skill resource and export nothing. Amp is a deliberate exclusion rather than an unfinished one: it defines custom agents as TypeScript plugins, not Markdown. For the others bmo has no verified directory, and guessing one would write files a harness never reads.
+
+#### Cross-harness translation
+
+Every one of these harnesses reads Markdown with YAML frontmatter, but only Claude reads every key bmo finds in it. `model: sonnet` and `tools: Read, Grep` name a model and tools that exist in Claude and nowhere else, and each harness mishandles them differently — Grok Build accepts any model string and then fails to resolve it when the subagent spawns, and a tool allowlist naming Claude's tools matches none of another harness's, leaving a subagent that can do nothing.
+
+So bmo translates on export:
+
+- **Claude receives the file byte-for-byte.** It defined the format; translating could only lose information.
+- **Every other harness receives rebuilt frontmatter** carrying `description`, plus `name` for the harnesses that resolve one from frontmatter. OpenCode names an agent by its file path and has no `name` key, so bmo omits it there and lets the preserved filename carry the name.
+- **The Markdown body is preserved byte-for-byte.** It is the agent's prompt, and it is the one part every harness reads identically.
+- **Dropped keys are printed, not silently discarded.** A dropped `tools:` allowlist is called out specifically, because it *narrows* what a subagent may do — losing it means the exported agent is not tool-restricted in its new harness.
 
 Behavior:
 
-- Only top-level `agents/*.md` files are installed; nested folders are ignored because Claude Code does not scan them.
+- Only top-level `agents/*.md` files are installed; nested folders are ignored because harnesses do not scan them.
 - Each file must parse as frontmatter with a non-empty `description`. `name` defaults to the filename stem and must use lowercase letters/digits separated by single hyphens. A malformed subagent fails the install rather than being skipped.
+- Installed filenames are preserved exactly, including for harnesses that derive the agent's name from the filename.
 - Installed filenames are recorded in metadata, so `bmo remove` deletes exactly those files, and `bmo update` removes subagents a new version no longer ships.
 - Installing over a subagent bmo doesn't own requires `--force`. Existing files are moved aside first and restored if any later step fails.
-- The `agents/` folder is also copied inside the skill, so the install stays a faithful copy of the published tree.
+- The `agents/` folder is also copied inside the skill, so the install stays a faithful copy of the published tree and the untranslated original stays available beside the skill.
 - `bmo doctor` reports subagents that went missing and files claimed by more than one skill.
 
 ---

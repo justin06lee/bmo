@@ -118,7 +118,7 @@ func InstallSkill(opts InstallOptions) (SkillMeta, error) {
 	if !target.SupportsAgents() {
 		agents = nil
 	}
-	rollbackAgents, commitAgents, err := installAgents(agents, skill.Path, agentsDir)
+	rollbackAgents, commitAgents, err := installAgents(agents, skill.Path, agentsDir, target.AgentFormat())
 	if err != nil {
 		restoreSkill()
 		return SkillMeta{}, err

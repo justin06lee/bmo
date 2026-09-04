@@ -191,7 +191,9 @@ func TestInstallForCodexDoesNotExportClaudeAgents(t *testing.T) {
 	}
 }
 
-func TestSupportsAgentsTreatsZeroHarnessAsClaude(t *testing.T) {
+// Agent support follows the resolved destination, which only ResolveTarget
+// hands out and only for a preset whose subagent directory bmo has verified.
+func TestSupportsAgentsFollowsResolvedDestination(t *testing.T) {
 	agentsDir := filepath.Join(t.TempDir(), "agents")
 	cases := []struct {
 		name   string
@@ -200,10 +202,11 @@ func TestSupportsAgentsTreatsZeroHarnessAsClaude(t *testing.T) {
 	}{
 		{"claude", Target{Harness: HarnessClaude, AgentsDir: agentsDir}, true},
 		{"zero harness is historical claude", Target{AgentsDir: agentsDir}, true},
+		{"grok", Target{Harness: HarnessGrok, AgentsDir: agentsDir}, true},
 		{"claude without destination", Target{Harness: HarnessClaude}, false},
 		{"zero target", Target{}, false},
-		{"codex", Target{Harness: HarnessCodex, AgentsDir: agentsDir}, false},
-		{"custom", Target{Harness: HarnessCustom, AgentsDir: agentsDir}, false},
+		{"codex has no verified agent convention", Target{Harness: HarnessCodex}, false},
+		{"custom", Target{Harness: HarnessCustom}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -253,16 +256,36 @@ func TestResolveTargetAgentDestinations(t *testing.T) {
 			t.Fatalf("resolved claude target (%s) must support agents: %+v", scope, target)
 		}
 	}
-	for _, name := range HarnessNames() {
-		if name == string(HarnessClaude) {
-			continue
-		}
-		target, err := ResolveTarget(name, ScopeProject, project, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if target.AgentsDir != "" || target.SupportsAgents() {
-			t.Fatalf("%s must not resolve a Claude agents destination: %+v", name, target)
+	// Every preset resolves the destination it declares, and only that one. A
+	// preset that declares none must resolve nothing rather than inheriting
+	// another harness's directory.
+	for _, info := range Harnesses() {
+		for _, scope := range []Scope{ScopeGlobal, ScopeProject} {
+			target, err := ResolveTarget(string(info.Name), scope, project, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.ProjectAgentsDir == "" {
+				if target.AgentsDir != "" || target.SupportsAgents() {
+					t.Fatalf("%s declares no agent convention but resolved %q", info.Name, target.AgentsDir)
+				}
+				continue
+			}
+			if !target.SupportsAgents() {
+				t.Fatalf("%s (%s) declares an agent convention but resolved none", info.Name, scope)
+			}
+			want := filepath.Join(home, filepath.FromSlash(info.GlobalAgentsDir))
+			if scope == ScopeProject {
+				want = filepath.Join(project, filepath.FromSlash(info.ProjectAgentsDir))
+			}
+			if target.AgentsDir != want {
+				t.Fatalf("%s (%s) agents dir = %q, want %q", info.Name, scope, target.AgentsDir, want)
+			}
+			// Agents live beside skills, never inside them: a skills directory
+			// that also held agent files would install each agent twice.
+			if strings.HasPrefix(target.AgentsDir, target.SkillsDir+string(filepath.Separator)) {
+				t.Fatalf("%s (%s) agents dir %q is inside its skills dir", info.Name, scope, target.AgentsDir)
+			}
 		}
 	}
 	custom, err := ResolveTarget("", ScopeProject, project, "tools/skills")
@@ -493,5 +516,63 @@ func TestGrokDetectedFromGrokHome(t *testing.T) {
 	})
 	if len(detected) != 1 || detected[0].Name != HarnessGrok {
 		t.Fatalf("detected harnesses = %+v, want grok from GROK_HOME", detected)
+	}
+}
+
+// The end-to-end shape of a non-Claude agent export: the file lands in that
+// harness's own agents directory, translated, and metadata tracks it so remove
+// and doctor can find it again.
+func TestInstallExportsAgentsToNonClaudeHarness(t *testing.T) {
+	home := t.TempDir()
+	grokHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", grokHome)
+
+	skillDir := filepath.Join(t.TempDir(), "portable")
+	if err := os.MkdirAll(filepath.Join(skillDir, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: portable\ndescription: Portable test skill.\n---\n\nUse this skill.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "agents", "worker.md"),
+		[]byte("---\nname: worker\ndescription: Worker.\nmodel: sonnet\ntools: Read, Grep\n---\n\nWork carefully.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skill, err := ValidateSkill(skillDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := ResolveTarget("grok", ScopeGlobal, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := InstallSkill(InstallOptions{
+		Scope: ScopeGlobal, Target: target, CWD: t.TempDir(),
+		Source: Source{Raw: skillDir, Type: SourceLocal}, Skill: skill,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Agents) != 1 || meta.Agents[0] != "worker.md" {
+		t.Fatalf("grok metadata should track the exported agent: %v", meta.Agents)
+	}
+	// GROK_HOME moves the agents directory exactly as it moves the skills one,
+	// so a relocated home does not get its skills and subagents split apart.
+	exported := filepath.Join(grokHome, "agents", "worker.md")
+	written, err := os.ReadFile(exported)
+	if err != nil {
+		t.Fatalf("agent was not exported to the grok agents dir: %v", err)
+	}
+	if strings.Contains(string(written), "sonnet") || strings.Contains(string(written), "Read, Grep") {
+		t.Fatalf("export carried Claude-only keys into grok:\n%s", written)
+	}
+	if !strings.Contains(string(written), "Work carefully.") {
+		t.Fatalf("export lost the prompt body:\n%s", written)
+	}
+	// The skill's own agents/ folder is still copied as a resource, so the
+	// untranslated original stays available beside the skill.
+	if _, err := os.Stat(filepath.Join(meta.InstalledPath, "agents", "worker.md")); err != nil {
+		t.Fatalf("bundled agent should remain a skill resource: %v", err)
 	}
 }
