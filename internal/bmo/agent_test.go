@@ -416,3 +416,114 @@ func TestRemoveAgentsRefusesEmptyDir(t *testing.T) {
 		t.Fatalf("expected no error for an empty file list, got %v", err)
 	}
 }
+
+// A Claude destination must keep receiving the exact bytes the skill shipped:
+// bmo reads Claude's format, so translating it could only lose information, and
+// existing installs would start differing from their source for no reason.
+func TestRenderAgentIsVerbatimForClaude(t *testing.T) {
+	content := []byte(agentDoc("worker", "Does the work."))
+	agent := Agent{File: "worker.md", Name: "worker", Description: "Does the work.", ExtraKeys: []string{"model"}}
+	rendered, err := renderAgent(content, agent, Target{Harness: HarnessClaude}.AgentFormat())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rendered) != string(content) {
+		t.Fatalf("claude export changed the file:\n%s", rendered)
+	}
+	if dropped := agent.DroppedKeys(Target{Harness: HarnessClaude}.AgentFormat()); len(dropped) != 0 {
+		t.Fatalf("claude export dropped %v", dropped)
+	}
+}
+
+// Claude's `model:` and `tools:` name a model and tools that exist only in
+// Claude. Carrying them into another harness installs a subagent that resolves
+// nothing when spawned, so the export keeps the portable keys and the prompt.
+func TestRenderAgentDropsClaudeOnlyKeys(t *testing.T) {
+	content := []byte("---\nname: worker\ndescription: Does the work.\nmodel: sonnet\ntools: Read, Grep\ncolor: blue\n---\nYou are a specialist.\n\nBe brief.\n")
+	agent := Agent{File: "worker.md", Name: "worker", Description: "Does the work.", ExtraKeys: []string{"color", "model", "tools"}}
+
+	format := Target{Harness: HarnessGrok}.AgentFormat()
+	rendered, err := renderAgent(content, agent, format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(rendered)
+	for _, gone := range []string{"model:", "tools:", "color:", "sonnet", "Read, Grep"} {
+		if strings.Contains(got, gone) {
+			t.Fatalf("export still carries %q:\n%s", gone, got)
+		}
+	}
+	if !strings.Contains(got, "name: worker") || !strings.Contains(got, "description: Does the work.") {
+		t.Fatalf("export lost a portable key:\n%s", got)
+	}
+	// The body is the agent's prompt and is the one part every harness reads
+	// identically, so it must survive byte-for-byte.
+	if !strings.Contains(got, "You are a specialist.\n\nBe brief.\n") {
+		t.Fatalf("export altered the prompt body:\n%s", got)
+	}
+	want := []string{"color", "model", "tools"}
+	if got := agent.DroppedKeys(format); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("DroppedKeys = %v, want %v", got, want)
+	}
+}
+
+// OpenCode names an agent by its file path, and its frontmatter schema has no
+// name key, so bmo must not write one there.
+func TestRenderAgentOmitsNameWhereFilenameCarriesIt(t *testing.T) {
+	content := []byte(agentDoc("worker", "Does the work."))
+	agent := Agent{File: "worker.md", Name: "worker", Description: "Does the work.", ExtraKeys: []string{"model"}}
+	format := Target{Harness: HarnessOpenCode}.AgentFormat()
+	rendered, err := renderAgent(content, agent, format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rendered), "name:") {
+		t.Fatalf("opencode export wrote a name key:\n%s", rendered)
+	}
+	if !strings.Contains(string(rendered), "description: Does the work.") {
+		t.Fatalf("opencode export lost the description:\n%s", rendered)
+	}
+	if dropped := agent.DroppedKeys(format); strings.Join(dropped, ",") != "model,name" {
+		t.Fatalf("DroppedKeys = %v, want model,name", dropped)
+	}
+}
+
+// A rendered agent has to parse back as a valid agent, or bmo would install
+// definitions the destination harness cannot read.
+func TestRenderedAgentRoundTrips(t *testing.T) {
+	skill := t.TempDir()
+	writeSkill(t, skill, "demo")
+	writeAgent(t, skill, "worker.md", agentDoc("worker", "Does the work."))
+	agents, err := DiscoverAgents(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	for _, harness := range []Harness{HarnessGrok, HarnessCursor, HarnessGemini, HarnessOpenCode} {
+		content, err := os.ReadFile(filepath.Join(skill, AgentsDirName, "worker.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rendered, err := renderAgent(content, agents[0], Target{Harness: harness}.AgentFormat())
+		if err != nil {
+			t.Fatalf("%s: %v", harness, err)
+		}
+		dir := filepath.Join(out, string(harness), AgentsDirName)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "worker.md"), rendered, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		reparsed, err := parseAgent(dir, "worker.md")
+		if err != nil {
+			t.Fatalf("%s export does not parse back: %v", harness, err)
+		}
+		if reparsed.Name != "worker" || reparsed.Description != "Does the work." {
+			t.Fatalf("%s round trip lost identity: %+v", harness, reparsed)
+		}
+		if len(reparsed.ExtraKeys) != 0 {
+			t.Fatalf("%s export still carries %v", harness, reparsed.ExtraKeys)
+		}
+	}
+}

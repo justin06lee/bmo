@@ -10,9 +10,15 @@ folder containing a `SKILL.md` file. `bmo` resolves a source (GitHub repo,
 local folder, or zip URL), validates the skill, copies it into the selected coding harness's
 skills directory, and tracks it so it can be listed, updated, or removed.
 
-A skill may also bundle **Claude Code subagents** in an `agents/` folder. The
-`claude` preset exports and tracks those files. Other harnesses retain the
-folder as a skill resource because their live agent schemas differ.
+A skill may also bundle **subagents** in an `agents/` folder. The `claude`,
+`cursor`, `gemini`, `grok`, and `opencode` presets export and track those files
+into their own agents directory beside their skills directory. Claude receives
+the file unchanged; the others receive frontmatter rebuilt from the keys they
+understand (`description`, plus `name` where the harness resolves one), with the
+prompt body preserved and Claude-only keys such as `model:` and `tools:`
+reported and dropped. Presets with no verified Markdown agent convention —
+including `codex`, `copilot`, and `amp`, whose custom agents are TypeScript
+plugins — retain the folder as a skill resource only.
 
 It **only copies files** — it never executes downloaded code, runs install
 hooks, or installs dependencies.

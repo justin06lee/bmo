@@ -1,6 +1,7 @@
 package bmo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,27 +10,80 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // AgentsDirName is the folder inside a skill that holds Claude Code subagent
 // definitions. It is a plain convention: any skill may ship one.
 const AgentsDirName = "agents"
 
-// Agent is a Claude Code subagent definition shipped inside a skill.
+// Agent is a subagent definition shipped inside a skill, authored in the
+// Claude Code format that the SKILL.md ecosystem standardized on.
 //
 // Subagents are not skills. A skill is instructions loaded into the current
 // context; a subagent is a separate worker with its own context window, model,
-// and tool allowlist, spawned by name. Claude Code discovers subagents from its
+// and tool allowlist, spawned by name. A harness discovers subagents from its
 // agents directory, which sits beside the skills directory rather than inside
 // it, so a skill's agents/ folder has to be installed to a second destination.
 type Agent struct {
 	// File is the base filename as shipped, e.g. "seo-technical.md". It is
-	// also the installed filename, so a skill's layout is predictable.
+	// also the installed filename, so a skill's layout is predictable, and it
+	// is how harnesses that derive an agent's name from its filename resolve
+	// the same agent bmo recorded.
 	File string
 	// Name is the frontmatter name, or the filename stem when absent. This is
-	// what Claude Code resolves when spawning the subagent.
+	// what a harness resolves when spawning the subagent.
 	Name        string
 	Description string
+	// ExtraKeys are the frontmatter keys beyond name and description, sorted.
+	// They are Claude's vocabulary, so exporting them to another harness is
+	// what AgentFormat.Portable drops; recording them here lets the CLI say
+	// which constraints an export left behind.
+	ExtraKeys []string
+}
+
+// AgentFormat is how one harness expects a subagent file to be written.
+//
+// Every harness bmo installs agents for reads Claude-format Markdown with YAML
+// frontmatter, but only Claude reads every key in it. `model: sonnet` and
+// `tools: Read, Grep` name a model and tools that exist in Claude and nowhere
+// else, and each harness resolves them differently: Grok Build accepts any
+// model string and fails to resolve it when the subagent is spawned, and a tool
+// allowlist naming Claude's tools matches none of another harness's, leaving an
+// agent that can do nothing. Carrying those keys across would produce subagents
+// that install cleanly and then misbehave.
+type AgentFormat struct {
+	// Verbatim writes the file through byte-for-byte. Claude Code defined the
+	// format, so its own files need no translation.
+	Verbatim bool
+	// NameInFrontmatter is whether the harness resolves an agent's name from a
+	// name: key. Harnesses that derive it from the filename instead have no
+	// such key in their schema, and bmo preserves the filename for them.
+	NameInFrontmatter bool
+}
+
+// portableAgentFrontmatter is the frontmatter bmo writes when translating an
+// agent for a non-Claude harness: the two keys every supported harness agrees
+// on. Struct order is the emitted order.
+type portableAgentFrontmatter struct {
+	Name        string `yaml:"name,omitempty"`
+	Description string `yaml:"description"`
+}
+
+// DroppedKeys reports the frontmatter this agent would lose when written in the
+// given format, so an install can say so instead of silently widening what the
+// subagent is allowed to do.
+func (a Agent) DroppedKeys(format AgentFormat) []string {
+	if format.Verbatim {
+		return nil
+	}
+	dropped := append([]string(nil), a.ExtraKeys...)
+	if !format.NameInFrontmatter && a.Name != "" {
+		dropped = append(dropped, "name")
+		sort.Strings(dropped)
+	}
+	return dropped
 }
 
 // DiscoverAgents reads the top-level *.md files in a skill's agents/ folder.
@@ -96,7 +150,78 @@ func parseAgent(dir, file string) (Agent, error) {
 	if err := ValidateAgentName(name); err != nil {
 		return Agent{}, err
 	}
-	return Agent{File: file, Name: name, Description: fm.Description}, nil
+	extra, err := extraAgentKeys(content)
+	if err != nil {
+		return Agent{}, err
+	}
+	return Agent{File: file, Name: name, Description: fm.Description, ExtraKeys: extra}, nil
+}
+
+// splitAgentFrontmatter separates an agent file's YAML frontmatter from the
+// Markdown body that follows it. The body is returned exactly as written: it is
+// the agent's prompt, and it is the one part every harness reads the same way.
+func splitAgentFrontmatter(content []byte) (frontmatter, body []byte, err error) {
+	content = bytes.TrimPrefix(content, []byte{0xEF, 0xBB, 0xBF})
+	if !bytes.HasPrefix(content, []byte("---\n")) && !bytes.HasPrefix(content, []byte("---\r\n")) {
+		return nil, nil, errors.New("agent file must start with YAML frontmatter")
+	}
+	lines := bytes.Split(content, []byte("\n"))
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(string(lines[i])) == "---" {
+			rest := lines[i+1:]
+			return bytes.Join(lines[1:i], []byte("\n")), bytes.Join(rest, []byte("\n")), nil
+		}
+	}
+	return nil, nil, errors.New("agent frontmatter is not closed")
+}
+
+// extraAgentKeys lists the frontmatter keys beyond name and description, which
+// are the keys a portable export cannot carry.
+func extraAgentKeys(content []byte) ([]string, error) {
+	frontmatter, _, err := splitAgentFrontmatter(content)
+	if err != nil {
+		return nil, err
+	}
+	var keys map[string]yaml.Node
+	if err := yaml.Unmarshal(frontmatter, &keys); err != nil {
+		return nil, fmt.Errorf("invalid YAML frontmatter: %w", err)
+	}
+	var extra []string
+	for key := range keys {
+		if key != "name" && key != "description" {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	return extra, nil
+}
+
+// renderAgent produces the bytes bmo writes for one agent in one harness's
+// format. Verbatim formats get the original file; every other harness gets
+// frontmatter rebuilt from the keys it actually understands, with the prompt
+// body preserved byte-for-byte.
+func renderAgent(content []byte, agent Agent, format AgentFormat) ([]byte, error) {
+	if format.Verbatim {
+		return content, nil
+	}
+	_, body, err := splitAgentFrontmatter(content)
+	if err != nil {
+		return nil, err
+	}
+	front := portableAgentFrontmatter{Description: agent.Description}
+	if format.NameInFrontmatter {
+		front.Name = agent.Name
+	}
+	encoded, err := yaml.Marshal(front)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	out.WriteString("---\n")
+	out.Write(encoded)
+	out.WriteString("---\n")
+	out.Write(body)
+	return out.Bytes(), nil
 }
 
 // ValidateAgentName applies the skill name rules to a subagent name: Claude
@@ -153,13 +278,14 @@ func agentConflicts(agents []Agent, agentsDir string, owned map[string]bool) []s
 	return conflicts
 }
 
-// installAgents copies a skill's agent files into agentsDir.
+// installAgents writes a skill's agent files into agentsDir in the destination
+// harness's format.
 //
 // Existing files are moved aside first, so the returned rollback restores the
 // directory exactly as it was if any later step of the install fails. Callers
 // must invoke either rollback (on failure) or commit (on success); commit drops
 // the backups.
-func installAgents(agents []Agent, srcDir, agentsDir string) (rollback func(), commit func(), err error) {
+func installAgents(agents []Agent, srcDir, agentsDir string, format AgentFormat) (rollback func(), commit func(), err error) {
 	if len(agents) == 0 {
 		return func() {}, func() {}, nil
 	}
@@ -187,7 +313,17 @@ func installAgents(agents []Agent, srcDir, agentsDir string) (rollback func(), c
 			}
 			backups[target] = backup
 		}
-		if err := copyFile(filepath.Join(srcDir, AgentsDirName, agent.File), target); err != nil {
+		content, readErr := os.ReadFile(filepath.Join(srcDir, AgentsDirName, agent.File))
+		if readErr != nil {
+			undo()
+			return nil, nil, readErr
+		}
+		rendered, renderErr := renderAgent(content, agent, format)
+		if renderErr != nil {
+			undo()
+			return nil, nil, fmt.Errorf("%s: %w", filepath.Join(AgentsDirName, agent.File), renderErr)
+		}
+		if err := os.WriteFile(target, rendered, 0o644); err != nil {
 			undo()
 			return nil, nil, err
 		}

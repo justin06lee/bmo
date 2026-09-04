@@ -61,6 +61,20 @@ func ProjectAgentsDir(cwd string) string {
 	return filepath.Join(cwd, ".claude", "agents")
 }
 
+// GrokGlobalAgentsDir returns the user-level subagent directory Grok Build
+// scans. It follows GROK_HOME for the same reason GrokGlobalSkillsDir does, so
+// a relocated Grok home receives a skill and its subagents together.
+func GrokGlobalAgentsDir() (string, error) {
+	if dir := os.Getenv("GROK_HOME"); dir != "" {
+		return filepath.Join(dir, "agents"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".grok", "agents"), nil
+}
+
 // AgentsDir resolves the subagent directory for a scope.
 func AgentsDir(scope Scope, cwd string) (string, error) {
 	if scope == ScopeProject {

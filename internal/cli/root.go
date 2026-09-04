@@ -1149,6 +1149,33 @@ func selectSkill(root, name string) (bmo.Skill, error) {
 	return bmo.Skill{}, fmt.Errorf("multiple skills found; use --name to choose one: %s", strings.Join(names, ", "))
 }
 
+// printAgentTranslation names the frontmatter an export leaves behind. A
+// `tools:` allowlist is the one that matters most: it narrows what a subagent
+// may do, and no other harness understands Claude's tool names, so dropping it
+// widens the agent. That is worth saying out loud rather than discovering later.
+func printAgentTranslation(cmd *cobra.Command, agents []bmo.Agent, target bmo.Target) {
+	format := target.AgentFormat()
+	dropped := map[string]bool{}
+	for _, agent := range agents {
+		for _, key := range agent.DroppedKeys(format) {
+			dropped[key] = true
+		}
+	}
+	if len(dropped) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(dropped))
+	for key := range dropped {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	fmt.Fprintf(cmd.OutOrStdout(), "Subagents are rewritten for %s; these Claude-only keys are not carried over: %s\n",
+		target.DisplayHarness(), strings.Join(keys, ", "))
+	if dropped["tools"] {
+		fmt.Fprintln(cmd.OutOrStdout(), "  Note: a dropped tools: allowlist means the exported subagent is not tool-restricted there.")
+	}
+}
+
 func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, target bmo.Target, dest string) {
 	fmt.Fprintf(cmd.OutOrStdout(), "Found skill: %s\nDescription: %s\n\nSource: %s\nHarness: %s\nScope: %s\nDestination: %s\nFiles: %d\n", skill.Name, skill.Description, source, target.DisplayHarness(), target.Scope, dest, skill.FileCount)
 	if skill.IgnoreRules > 0 {
@@ -1157,6 +1184,7 @@ func printSkillPreview(cmd *cobra.Command, skill bmo.Skill, source string, targe
 	if len(skill.Agents) > 0 && target.SupportsAgents() {
 		fmt.Fprintf(cmd.OutOrStdout(), "Subagents: %s\nSubagent destination: %s\n",
 			strings.Join(bmo.AgentNames(skill.Agents), ", "), target.AgentsDir)
+		printAgentTranslation(cmd, skill.Agents, target)
 	} else if len(skill.Agents) > 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "Bundled agents remain skill resources (their format is harness-specific).")
 	}

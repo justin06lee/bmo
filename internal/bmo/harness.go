@@ -32,20 +32,33 @@ const (
 
 // HarnessInfo describes a built-in installation preset.
 type HarnessInfo struct {
-	Name         Harness
-	Description  string
-	ProjectDir   string
-	GlobalDir    string
-	Executable   string
-	DetectionDir string
-	DesktopApps  []string
+	Name        Harness
+	Description string
+	ProjectDir  string
+	GlobalDir   string
+	// ProjectAgentsDir and GlobalAgentsDir are the harness's subagent
+	// directories, which sit beside its skills directories rather than inside
+	// them. Both are empty for a harness with no Markdown subagent convention:
+	// Amp defines custom agents as TypeScript plugins, and a harness bmo has
+	// not verified must not have a directory guessed for it.
+	ProjectAgentsDir string
+	GlobalAgentsDir  string
+	// AgentNameInFrontmatter is whether this harness resolves a subagent's name
+	// from a name: key. Harnesses that derive it from the filename have no such
+	// key, so an export omits it rather than writing one they may reject.
+	AgentNameInFrontmatter bool
+	Executable             string
+	DetectionDir           string
+	DesktopApps            []string
 }
 
 var harnesses = map[Harness]HarnessInfo{
 	HarnessClaude: {
 		Name: HarnessClaude, Description: "Claude Code and Claude desktop",
 		ProjectDir: ".claude/skills", GlobalDir: ".claude/skills",
-		Executable: "claude", DetectionDir: ".claude", DesktopApps: []string{"Claude.app"},
+		ProjectAgentsDir: ".claude/agents", GlobalAgentsDir: ".claude/agents",
+		AgentNameInFrontmatter: true,
+		Executable:             "claude", DetectionDir: ".claude", DesktopApps: []string{"Claude.app"},
 	},
 	HarnessCodex: {
 		Name: HarnessCodex, Description: "ChatGPT and Codex (alias: chatgpt)",
@@ -55,12 +68,16 @@ var harnesses = map[Harness]HarnessInfo{
 	HarnessCursor: {
 		Name: HarnessCursor, Description: "Cursor",
 		ProjectDir: ".cursor/skills", GlobalDir: ".cursor/skills",
-		Executable: "cursor", DetectionDir: ".cursor", DesktopApps: []string{"Cursor.app"},
+		ProjectAgentsDir: ".cursor/agents", GlobalAgentsDir: ".cursor/agents",
+		AgentNameInFrontmatter: true,
+		Executable:             "cursor", DetectionDir: ".cursor", DesktopApps: []string{"Cursor.app"},
 	},
 	HarnessGemini: {
 		Name: HarnessGemini, Description: "Gemini CLI",
 		ProjectDir: ".gemini/skills", GlobalDir: ".gemini/skills",
-		Executable: "gemini", DetectionDir: ".gemini",
+		ProjectAgentsDir: ".gemini/agents", GlobalAgentsDir: ".gemini/agents",
+		AgentNameInFrontmatter: true,
+		Executable:             "gemini", DetectionDir: ".gemini",
 	},
 	HarnessCopilot: {
 		Name: HarnessCopilot, Description: "GitHub Copilot",
@@ -75,6 +92,9 @@ var harnesses = map[Harness]HarnessInfo{
 	HarnessOpenCode: {
 		Name: HarnessOpenCode, Description: "OpenCode",
 		ProjectDir: ".opencode/skills", GlobalDir: ".config/opencode/skills",
+		// OpenCode names an agent by its path below agents/, so its schema has
+		// no name: key and an export leaves the filename to carry the name.
+		ProjectAgentsDir: ".opencode/agents", GlobalAgentsDir: ".config/opencode/agents",
 		Executable: "opencode", DetectionDir: ".config/opencode",
 	},
 	HarnessAmp: {
@@ -90,7 +110,9 @@ var harnesses = map[Harness]HarnessInfo{
 	HarnessGrok: {
 		Name: HarnessGrok, Description: "Grok Build",
 		ProjectDir: ".grok/skills", GlobalDir: ".grok/skills",
-		Executable: "grok", DetectionDir: ".grok",
+		ProjectAgentsDir: ".grok/agents", GlobalAgentsDir: ".grok/agents",
+		AgentNameInFrontmatter: true,
+		Executable:             "grok", DetectionDir: ".grok",
 	},
 }
 
@@ -329,20 +351,42 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 	}
 
 	target := Target{Harness: harness, RequestedAs: requestedAs, Scope: scope, SkillsDir: skillsDir, MetadataPath: metadataPath}
-	// Claude Code is the only preset whose bundled agent format bmo currently
-	// validates. Other harnesses use different schemas, so their agents/ folder
-	// remains a skill resource instead of being exported as live configuration.
-	if harness == HarnessClaude {
-		agentsDir, err := AgentsDir(scope, cwd)
-		// A resolved Claude target with an empty AgentsDir would silently stop
-		// supporting agents, so an unresolvable home directory fails outright
-		// rather than handing back a half-populated target.
+	// A preset with no agents directory has no Markdown subagent convention
+	// bmo has verified, so its skills' agents/ folder stays a skill resource
+	// rather than being written somewhere the harness will not read.
+	if info.ProjectAgentsDir != "" {
+		agentsDir, err := resolveAgentsDir(harness, info, scope, cwd)
+		// A resolved target with an agent convention but an empty AgentsDir
+		// would silently stop supporting agents, so an unresolvable home
+		// directory fails outright rather than handing back a half-populated
+		// target.
 		if err != nil {
 			return Target{}, err
 		}
 		target.AgentsDir = agentsDir
 	}
 	return target, nil
+}
+
+// resolveAgentsDir resolves one preset's subagent directory for a scope. The
+// two harnesses whose configuration home moves with an environment variable
+// resolve through the same helpers their skills directories use, so agents and
+// skills never land in two different homes.
+func resolveAgentsDir(harness Harness, info HarnessInfo, scope Scope, cwd string) (string, error) {
+	if scope == ScopeProject {
+		return filepath.Join(cwd, filepath.FromSlash(info.ProjectAgentsDir)), nil
+	}
+	switch harness {
+	case HarnessClaude:
+		return GlobalAgentsDir()
+	case HarnessGrok:
+		return GrokGlobalAgentsDir()
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, filepath.FromSlash(info.GlobalAgentsDir)), nil
 }
 
 // DisplayHarness returns the user-selected alias when one was used while
@@ -358,11 +402,23 @@ func (t Target) DisplayHarness() string {
 }
 
 // SupportsAgents reports whether bmo can safely export bundled agent files for
-// this target. A zero-value harness is Claude Code, matching the metadata this
-// package records for the same target: treating it as unsupported here would
-// track subagents that were never installed.
+// this target. ResolveTarget populates AgentsDir only for a preset whose
+// subagent directory bmo has verified, so the resolved path is the whole
+// answer: a target without one must not have subagents recorded against it,
+// or metadata would track files that were never installed.
 func (t Target) SupportsAgents() bool {
-	return (t.Harness == HarnessClaude || t.Harness == "") && t.AgentsDir != ""
+	return t.AgentsDir != ""
+}
+
+// AgentFormat returns how this target's harness expects a subagent file to be
+// written. A zero-value harness is Claude Code, matching the rest of this
+// package, and Claude is the format bmo reads, so its files pass through
+// untouched and existing installs stay byte-identical.
+func (t Target) AgentFormat() AgentFormat {
+	if t.Harness == HarnessClaude || t.Harness == "" {
+		return AgentFormat{Verbatim: true, NameInFrontmatter: true}
+	}
+	return AgentFormat{NameInFrontmatter: harnesses[t.Harness].AgentNameInFrontmatter}
 }
 
 // ValidateSkillForTarget enforces the portable common denominator for every

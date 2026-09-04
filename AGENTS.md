@@ -22,7 +22,8 @@
 
 - Keep the `SKILL.md` format harness-neutral and compatible with the Agent Skills open standard.
 - Add harness-specific paths in one place: `internal/bmo/harness.go`.
-- Never export Claude-format `agents/*.md` files into another harness's live agent directory without a validated format adapter.
+- A harness only gets an agent destination once its Markdown subagent directory is verified against that harness's own documentation or source; never guess one.
+- Claude receives bundled `agents/*.md` byte-for-byte. Every other harness receives frontmatter rebuilt from the keys it understands, with the prompt body preserved; a key that does not port is reported to the user rather than dropped silently, because losing a `tools:` allowlist widens what the subagent may do.
 - Keep metadata aligned with its resolved destination; presets sharing one `.agents/skills` directory intentionally share that project install.
 - Preserve `CLAUDE_CONFIG_DIR`, `~/.bmo/skills.json`, and `.claude/bmo-lock.json` behavior for existing Claude users.
 - For an unrecognized harness, maintain the `--skills-dir` escape hatch rather than guessing its filesystem convention.
