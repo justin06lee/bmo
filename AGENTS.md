@@ -26,7 +26,8 @@
 - Keep metadata aligned with its resolved destination; presets sharing one `.agents/skills` directory intentionally share that project install.
 - Preserve `CLAUDE_CONFIG_DIR`, `~/.bmo/skills.json`, and `.claude/bmo-lock.json` behavior for existing Claude users.
 - For an unrecognized harness, maintain the `--skills-dir` escape hatch rather than guessing its filesystem convention.
-- A new harness preset must appear in `HarnessPreferenceOrder` and `HarnessesByProjectConfigDir`, or fan-out commands and `bmo scout` will silently skip it.
+- A new harness preset must appear in `HarnessPreferenceOrder`, `HarnessesByProjectConfigDir`, and the detection order in `detectedHarnesses`, or fan-out commands, `bmo scout`, and `everyone` will silently skip it.
+- A harness that relocates its configuration home through an environment variable resolves its global destination through that variable, not a fixed `~` path, so bmo does not install where the harness will not look.
 - A fan-out command resolves its destinations through `sweepLocations` and `everywhereHarnesses`, so a location keyword cannot come to mean different things on different commands. `universe` is the machine-wide sweep; `everywhere` is the global destination, except on `update` and `share`, which predate the word and translate it with `sweepEverything`.
 - Only `remove`, `update`, and `share` accept `universe`. A command that resolves a single destination must reject it rather than quietly treat it as global.
 - A removal never deletes a path outside the target's resolved skills directory. When metadata records a path that has moved outside it, the copy named inside the resolved directory is removed instead, and an entry with no copy left is untracked rather than refused.

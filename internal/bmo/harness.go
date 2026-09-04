@@ -26,6 +26,7 @@ const (
 	HarnessOpenCode Harness = "opencode"
 	HarnessAmp      Harness = "amp"
 	HarnessCline    Harness = "cline"
+	HarnessGrok     Harness = "grok"
 	HarnessCustom   Harness = "custom"
 )
 
@@ -85,6 +86,11 @@ var harnesses = map[Harness]HarnessInfo{
 		Name: HarnessCline, Description: "Cline",
 		ProjectDir: ".cline/skills", GlobalDir: ".cline/skills",
 		Executable: "cline", DetectionDir: ".cline",
+	},
+	HarnessGrok: {
+		Name: HarnessGrok, Description: "Grok Build",
+		ProjectDir: ".grok/skills", GlobalDir: ".grok/skills",
+		Executable: "grok", DetectionDir: ".grok",
 	},
 }
 
@@ -186,6 +192,7 @@ func detectedHarnesses(environment detectionEnvironment) []HarnessInfo {
 	order := []Harness{
 		HarnessCodex, HarnessClaude, HarnessCursor, HarnessGemini,
 		HarnessCopilot, HarnessWindsurf, HarnessOpenCode, HarnessAmp, HarnessCline,
+		HarnessGrok,
 	}
 	var detected []HarnessInfo
 	for _, harness := range order {
@@ -202,6 +209,11 @@ func detectedHarnesses(environment detectionEnvironment) []HarnessInfo {
 		}
 		if harness == HarnessCodex {
 			if dir := environment.getenv("CODEX_HOME"); dir != "" && environment.dirExists(dir) {
+				configExists = true
+			}
+		}
+		if harness == HarnessGrok {
+			if dir := environment.getenv("GROK_HOME"); dir != "" && environment.dirExists(dir) {
 				configExists = true
 			}
 		}
@@ -283,6 +295,8 @@ func ResolveTarget(harnessName string, scope Scope, cwd, skillsDirOverride strin
 		skillsDir = filepath.Join(cwd, filepath.FromSlash(info.ProjectDir))
 	} else if harness == HarnessClaude {
 		skillsDir, err = GlobalSkillsDir()
+	} else if harness == HarnessGrok {
+		skillsDir, err = GrokGlobalSkillsDir()
 	} else {
 		var home string
 		home, err = os.UserHomeDir()
@@ -383,7 +397,7 @@ func (t Target) InvocationHint(name string) string {
 		return "$" + name
 	case HarnessWindsurf:
 		return "@" + name
-	case HarnessClaude, HarnessCursor, HarnessCopilot, HarnessAmp:
+	case HarnessClaude, HarnessCursor, HarnessCopilot, HarnessAmp, HarnessGrok:
 		return "/" + name
 	default:
 		return "ask the agent to use " + name

@@ -28,6 +28,7 @@ func TestHarnessTargetsResolveDocumentedPaths(t *testing.T) {
 		{"opencode", ".opencode/skills", ".config/opencode/skills"},
 		{"amp", ".agents/skills", ".config/agents/skills"},
 		{"cline", ".cline/skills", ".cline/skills"},
+		{"grok", ".grok/skills", ".grok/skills"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -337,6 +338,7 @@ func TestInvocationHintPerHarness(t *testing.T) {
 		HarnessCursor:   "/demo",
 		HarnessCopilot:  "/demo",
 		HarnessAmp:      "/demo",
+		HarnessGrok:     "/demo",
 		HarnessCodex:    "$demo",
 		HarnessWindsurf: "@demo",
 	}
@@ -406,5 +408,90 @@ func TestHarnessGroupingsCoverEveryPreset(t *testing.T) {
 	}
 	if agents := grouped[".agents"]; len(agents) != 2 || agents[0].Name != HarnessCodex {
 		t.Fatalf(".agents grouping = %v, want codex first then amp", agents)
+	}
+}
+
+// TestDetectionOrderCoversEveryPreset keeps `everyone` complete. The detection
+// sweep walks its own hard-coded order rather than deriving one from the
+// preset map, so a harness added to the map alone would resolve fine by name
+// and still never be detected.
+func TestDetectionOrderCoversEveryPreset(t *testing.T) {
+	home := t.TempDir()
+	for _, info := range Harnesses() {
+		if err := os.MkdirAll(filepath.Join(home, filepath.FromSlash(info.DetectionDir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	detected := detectedHarnesses(detectionEnvironment{
+		home:            home,
+		applicationDirs: []string{t.TempDir()},
+		lookPath:        func(string) (string, error) { return "", errors.New("not found") },
+		getenv:          func(string) string { return "" },
+		dirExists: func(path string) bool {
+			stat, err := os.Stat(path)
+			return err == nil && stat.IsDir()
+		},
+	})
+	seen := map[Harness]bool{}
+	for _, info := range detected {
+		seen[info.Name] = true
+	}
+	for _, info := range Harnesses() {
+		if !seen[info.Name] {
+			t.Errorf("%s has a preset but is missing from the detection order", info.Name)
+		}
+	}
+}
+
+// TestGrokGlobalTargetFollowsGrokHome pins bmo's global Grok destination to the
+// home Grok Build itself resolves. Grok reads user skills from $GROK_HOME/skills
+// with no fallback to the literal ~/.grok, so writing there regardless would
+// install skills Grok never loads.
+func TestGrokGlobalTargetFollowsGrokHome(t *testing.T) {
+	grokHome := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GROK_HOME", grokHome)
+
+	target, err := ResolveTarget("grok", ScopeGlobal, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(grokHome, "skills"); target.SkillsDir != want {
+		t.Fatalf("global skills dir = %q, want %q", target.SkillsDir, want)
+	}
+
+	t.Setenv("GROK_HOME", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	target, err = ResolveTarget("grok", ScopeGlobal, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".grok", "skills"); target.SkillsDir != want {
+		t.Fatalf("global skills dir without GROK_HOME = %q, want %q", target.SkillsDir, want)
+	}
+}
+
+// TestGrokDetectedFromGrokHome covers the relocated-home case for `everyone`:
+// a machine whose Grok config lives outside ~/.grok must still be detected.
+func TestGrokDetectedFromGrokHome(t *testing.T) {
+	grokHome := t.TempDir()
+	detected := detectedHarnesses(detectionEnvironment{
+		home:            t.TempDir(),
+		applicationDirs: []string{t.TempDir()},
+		lookPath:        func(string) (string, error) { return "", errors.New("not found") },
+		getenv: func(name string) string {
+			if name == "GROK_HOME" {
+				return grokHome
+			}
+			return ""
+		},
+		dirExists: func(path string) bool {
+			stat, err := os.Stat(path)
+			return err == nil && stat.IsDir()
+		},
+	})
+	if len(detected) != 1 || detected[0].Name != HarnessGrok {
+		t.Fatalf("detected harnesses = %+v, want grok from GROK_HOME", detected)
 	}
 }

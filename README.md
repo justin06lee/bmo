@@ -35,7 +35,7 @@ bmo add bmo    # ...or restore it if you deleted it
 
 ## What It Does
 
-`bmo` installs standalone [Agent Skills](https://agentskills.io). A skill is a folder containing a `SKILL.md` file. Built-in presets support ChatGPT/Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, Amp, and Cline; `--skills-dir` supports any other harness that reads the same open format.
+`bmo` installs standalone [Agent Skills](https://agentskills.io). A skill is a folder containing a `SKILL.md` file. Built-in presets support ChatGPT/Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, Amp, Cline, and Grok Build; `--skills-dir` supports any other harness that reads the same open format.
 
 It resolves a source (GitHub repo, local path, or zip URL), finds installable skill folders, validates the `SKILL.md` frontmatter, copies the selected folder into the target harness's skills directory, and records metadata so the skill can be listed, updated, or removed later.
 
@@ -513,7 +513,7 @@ Checks:
 - No duplicate skill names across scopes
 - Harness-specific skill and metadata destinations
 - Metadata that tracks subagents a harness cannot host (the state `remove` refuses)
-- `CLAUDE_CONFIG_DIR` status when checking the Claude preset
+- `CLAUDE_CONFIG_DIR` status when checking the Claude preset, and `GROK_HOME` status when checking Grok Build
 
 The `here` / `everywhere` keyword (or `--project` / `--global`) narrows the
 report to one scope. An unresolvable destination — say, no home directory — is
@@ -536,8 +536,9 @@ Claude remains the default for backward compatibility. On `add`, put the harness
 | `opencode` | `.opencode/skills/` | `~/.config/opencode/skills/` |
 | `amp` | `.agents/skills/` | `~/.config/agents/skills/` |
 | `cline` | `.cline/skills/` | `~/.cline/skills/` |
+| `grok` | `.grok/skills/` | `$GROK_HOME/skills/` or `~/.grok/skills/` |
 
-Run `bmo harnesses` to print this table from the installed binary. `chatgpt` is an alias for `codex`: both use the same files and canonical `codex` metadata, so installs cannot drift or be removed out from under one another. Invoke an installed skill as `@name` in ChatGPT and `$name` in Codex. The shared project and global locations use the cross-harness `.agents/skills` convention, which is also discovered by Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, and Amp. For a new or private harness, `--skills-dir PATH` uses the exact directory you provide and stores `bmo-lock.json` beside it.
+Run `bmo harnesses` to print this table from the installed binary. `chatgpt` is an alias for `codex`: both use the same files and canonical `codex` metadata, so installs cannot drift or be removed out from under one another. Invoke an installed skill as `@name` in ChatGPT and `$name` in Codex. The shared project and global locations use the cross-harness `.agents/skills` convention, which is also discovered by Cursor, Gemini CLI, GitHub Copilot, Windsurf, OpenCode, Amp, and Grok Build. Grok Build reads the most locations of any preset: alongside `.grok/skills` and `.agents/skills` it discovers the `claude` and `cursor` locations at both project and global scope, unless the `[compat]` table in `~/.grok/config.toml` disables them. Installing to the `grok` preset targets the one location that table cannot turn off. For a new or private harness, `--skills-dir PATH` uses the exact directory you provide and stores `bmo-lock.json` beside it.
 
 Detection is path-based and does not read credentials. In addition to CLI and configuration-directory detection, macOS recognizes Claude.app, Cursor.app, Windsurf.app, and either ChatGPT.app or Codex.app. A broken CLI does not prevent BMO from installing files for a working desktop app.
 
@@ -734,7 +735,7 @@ Writes are **atomic** — bmo writes to a temporary file first, syncs it to disk
 
 1. **Run `bmo doctor`** — it checks the most common issues.
 2. Run `bmo harnesses` and confirm you selected the intended preset.
-3. For Claude, ensure `CLAUDE_CONFIG_DIR` is set if you expect a custom Claude location.
+3. For Claude, ensure `CLAUDE_CONFIG_DIR` is set if you expect a custom Claude location; the same goes for `GROK_HOME` and Grok Build.
 4. Check the metadata path printed by `bmo doctor --harness NAME`.
 5. For permission issues, verify the skills directory is writable.
 6. If `bmo update everywhere` misses a repo, run [`bmo scout`](#scout) from a

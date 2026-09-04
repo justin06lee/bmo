@@ -27,6 +27,22 @@ func ProjectSkillsDir(cwd string) string {
 	return filepath.Join(cwd, ".claude", "skills")
 }
 
+// GrokGlobalSkillsDir returns the user-level skills directory Grok Build
+// scans. Grok resolves its home as $GROK_HOME, else ~/.grok, and unlike its
+// subagent lookup it does not also fall back to the literal ~/.grok for
+// skills. Installing to a fixed ~/.grok/skills would therefore be invisible to
+// anyone who sets GROK_HOME.
+func GrokGlobalSkillsDir() (string, error) {
+	if dir := os.Getenv("GROK_HOME"); dir != "" {
+		return filepath.Join(dir, "skills"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".grok", "skills"), nil
+}
+
 // GlobalAgentsDir returns the directory Claude Code scans for global subagent
 // definitions. It sits beside the skills directory, which is why a skill's
 // bundled agents/ folder cannot simply be copied in place with the skill.

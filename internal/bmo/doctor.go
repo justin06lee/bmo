@@ -47,9 +47,7 @@ func RunDoctorForHarness(cwd, harnessName string) ([]DoctorCheck, error) {
 		checks = append(checks, checkDuplicatesForTargets(global, project)...)
 	}
 	checks = append(checks, checkProjectRegistry()...)
-	if harness == HarnessClaude && os.Getenv("CLAUDE_CONFIG_DIR") != "" {
-		checks = append(checks, DoctorCheck{DoctorOK, "CLAUDE_CONFIG_DIR is set"})
-	}
+	checks = append(checks, checkHarnessHomeOverride(harness)...)
 	return checks, nil
 }
 
@@ -72,10 +70,26 @@ func RunDoctorForHarnessScope(cwd, harnessName string, scope Scope) ([]DoctorChe
 	if scope == ScopeGlobal {
 		checks = append(checks, checkProjectRegistry()...)
 	}
-	if harness == HarnessClaude && os.Getenv("CLAUDE_CONFIG_DIR") != "" {
-		checks = append(checks, DoctorCheck{DoctorOK, "CLAUDE_CONFIG_DIR is set"})
-	}
+	checks = append(checks, checkHarnessHomeOverride(harness)...)
 	return checks, nil
+}
+
+// checkHarnessHomeOverride reports the environment variable a harness uses to
+// relocate its configuration home, when that variable is set. It is the
+// difference between the destination bmo resolved and the one the user
+// expected, so doctor names it rather than leaving the path unexplained.
+func checkHarnessHomeOverride(harness Harness) []DoctorCheck {
+	variable := ""
+	switch harness {
+	case HarnessClaude:
+		variable = "CLAUDE_CONFIG_DIR"
+	case HarnessGrok:
+		variable = "GROK_HOME"
+	}
+	if variable == "" || os.Getenv(variable) == "" {
+		return nil
+	}
+	return []DoctorCheck{{DoctorOK, variable + " is set"}}
 }
 
 // scopeChecks runs the per-destination diagnostics for one resolved target.
