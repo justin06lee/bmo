@@ -245,7 +245,7 @@ func TestIgnoredAgentIsNotInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
+	agentsDir, err := ClaudeAgentsDir(ScopeGlobal, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}

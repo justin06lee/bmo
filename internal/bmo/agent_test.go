@@ -108,7 +108,7 @@ func TestInstallPlacesAgentsInAgentsDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
+	agentsDir, err := ClaudeAgentsDir(ScopeGlobal, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,10 +140,10 @@ func TestInstallScopesAgentsToProject(t *testing.T) {
 	if _, err := InstallSkill(InstallOptions{Scope: ScopeProject, Source: Source{Raw: "./demo", Type: SourceLocal}, Skill: skill, CWD: cwd}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(ProjectAgentsDir(cwd), "alpha.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(ClaudeProjectAgentsDir(cwd), "alpha.md")); err != nil {
 		t.Fatalf("expected project-scoped agent: %v", err)
 	}
-	globalAgents, err := GlobalAgentsDir()
+	globalAgents, err := ClaudeGlobalAgentsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestInstallRefusesForeignAgentWithoutForce(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude-test"))
 	cwd := t.TempDir()
-	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
+	agentsDir, err := ClaudeAgentsDir(ScopeGlobal, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestInstallRefusesForeignAgentWithoutForce(t *testing.T) {
 		t.Fatalf("expected a conflict error naming the agent, got %v", err)
 	}
 	// The skill must not be half-installed after a refused conflict.
-	skillsDir, err := GlobalSkillsDir()
+	skillsDir, err := ClaudeGlobalSkillsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestUpdateDropsAgentsTheSkillNoLongerShips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
+	agentsDir, err := ClaudeAgentsDir(ScopeGlobal, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestRemoveSkillRemovesItsAgents(t *testing.T) {
 	if _, err := InstallSkill(InstallOptions{Scope: ScopeGlobal, Source: Source{Raw: "./demo", Type: SourceLocal}, Skill: skill, CWD: cwd}); err != nil {
 		t.Fatal(err)
 	}
-	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
+	agentsDir, err := ClaudeAgentsDir(ScopeGlobal, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestDryRunInstallsNothing(t *testing.T) {
 	if len(meta.Agents) != 1 {
 		t.Fatalf("dry run should still report the agents it would install, got %v", meta.Agents)
 	}
-	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
+	agentsDir, err := ClaudeAgentsDir(ScopeGlobal, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestDoctorFlagsMissingAndDuplicateAgents(t *testing.T) {
 	if healthy := doctorMessages(runDoctorClaude(t, cwd), DoctorWarning); len(healthy) > 0 {
 		t.Fatalf("expected no warnings for a clean install, got %v", healthy)
 	}
-	agentsDir, err := AgentsDir(ScopeGlobal, cwd)
+	agentsDir, err := ClaudeAgentsDir(ScopeGlobal, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestDoctorFlagsMissingAndDuplicateAgents(t *testing.T) {
 
 	// Two skills claiming one subagent file: whichever installed last wins,
 	// which is exactly the ambiguity doctor should surface.
-	metaPath, err := GlobalMetadataPath()
+	metaPath, err := ClaudeGlobalMetadataPath()
 	if err != nil {
 		t.Fatal(err)
 	}
