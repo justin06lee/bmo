@@ -557,10 +557,15 @@ func printExecutableWarning(out io.Writer, skills []bmo.Skill) {
 func newInitCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init [here|everywhere] [HARNESS|everyone]",
-		Short: "Install the bundled bmo skill into a coding harness",
-		Example: `  bmo init here
-  bmo init codex
-  bmo init everyone`,
+		Short: "Install the bundled bmo skill into every detected coding harness",
+		Long: `Install the bundled bmo skill.
+
+With no harness named, init installs into every harness detected on this
+machine — the skill is how a harness learns what bmo is, so every harness
+wants it. Name one to install there only.`,
+		Example: `  bmo init
+  bmo init here
+  bmo init codex`,
 		Args: argsWithKeywords(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
@@ -571,7 +576,11 @@ func newInitCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if positionalHarness == everyoneKeyword {
+			// Naming no harness means every detected one. Naming a single
+			// harness — positionally, with --harness, or with --skills-dir —
+			// narrows it back to that destination alone.
+			named := positionalHarness != "" || opts.harness != "" || opts.skillsDir != ""
+			if positionalHarness == everyoneKeyword || !named {
 				return initEveryone(cmd, keyword, cwd, opts)
 			}
 			effective, err := withPositionalHarness(opts, positionalHarness)
@@ -581,19 +590,7 @@ func newInitCommand(opts *options) *cobra.Command {
 			if err := keywordScopeConflict(keyword, effective); err != nil {
 				return err
 			}
-			scope := keywordScope(keyword, effective)
-			target, err := targetFor(scope, cwd, effective)
-			if err != nil {
-				return err
-			}
-			meta, err := installBmoSkillToTarget(target, cwd, true)
-			if err != nil {
-				return err
-			}
-			markBootstrappedFor(target.Harness)
-			fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in %s:\n  %s\n", meta.Name, meta.InstalledPath, target.DisplayHarness(), target.InvocationHint(meta.Name))
-			printOtherHarnessHint(cmd, target, effective)
-			return nil
+			return initOne(cmd, keywordScope(keyword, effective), cwd, effective)
 		},
 	}
 	cmd.Flags().BoolVar(&opts.project, "project", false, "Install into the harness's project skills directory")
@@ -604,16 +601,43 @@ func newInitCommand(opts *options) *cobra.Command {
 	return cmd
 }
 
+// initOne installs the bundled skill into a single resolved destination.
+func initOne(cmd *cobra.Command, scope bmo.Scope, cwd string, opts *options) error {
+	target, err := targetFor(scope, cwd, opts)
+	if err != nil {
+		return err
+	}
+	meta, err := installBmoSkillToTarget(target, cwd, true)
+	if err != nil {
+		return err
+	}
+	markBootstrappedFor(target.Harness)
+	fmt.Fprintf(cmd.OutOrStdout(), "Installed %s to %s\n\nUse it in %s:\n  %s\n", meta.Name, meta.InstalledPath, target.DisplayHarness(), target.InvocationHint(meta.Name))
+	return nil
+}
+
 // initEveryone installs the bundled bmo skill into every detected harness,
 // reusing the same fan-out `bmo add SOURCE everyone` performs so the two cannot
 // drift on which destinations count as detected or how shared ones are merged.
 // init refreshes rather than first-installs, so it forces.
+//
+// It does not ask first. Unlike `bmo add`, the only thing being installed is
+// bmo's own bundled skill: no third-party code, nothing executable, idempotent,
+// and undone by `bmo remove bmo`. The first-run bootstrap already installs it
+// without asking, so prompting here would be the odd one out.
 func initEveryone(cmd *cobra.Command, keyword, cwd string, opts *options) error {
 	if opts.harness != "" || opts.skillsDir != "" {
 		return errors.New(`"everyone" already covers every harness; drop --harness and --skills-dir`)
 	}
 	if err := keywordScopeConflict(keyword, opts); err != nil {
 		return err
+	}
+	scope := keywordScope(keyword, opts)
+	// A machine where bmo can detect nothing still gets the historical single
+	// destination, so a bare `bmo init` always installs the skill somewhere
+	// rather than failing with "no coding harnesses detected".
+	if len(bmo.DetectedHarnesses()) == 0 {
+		return initOne(cmd, scope, cwd, opts)
 	}
 	src, err := bmo.ParseSource(bmo.EmbeddedSkillName)
 	if err != nil {
@@ -626,7 +650,8 @@ func initEveryone(cmd *cobra.Command, keyword, cwd string, opts *options) error 
 	defer cleanupResolved(resolved)
 	fanOut := *opts
 	fanOut.force = true
-	if err := addEveryone(cmd, resolved, keywordScope(keyword, opts), cwd, &fanOut); err != nil {
+	fanOut.yes = true
+	if err := addEveryone(cmd, resolved, scope, cwd, &fanOut); err != nil {
 		return err
 	}
 	// Every harness the fan-out reached has now had its one-time install, so
@@ -635,26 +660,6 @@ func initEveryone(cmd *cobra.Command, keyword, cwd string, opts *options) error 
 		markBootstrappedFor(info.Name)
 	}
 	return nil
-}
-
-// printOtherHarnessHint names the harnesses a single-destination init did not
-// reach. bmo defaults to Claude when no harness is named, which on a machine
-// running something else would otherwise install the skill somewhere the user
-// never looks, with nothing said about it.
-func printOtherHarnessHint(cmd *cobra.Command, target bmo.Target, opts *options) {
-	if opts.harness != "" || opts.skillsDir != "" {
-		return
-	}
-	var others []string
-	for _, info := range bmo.DetectedHarnesses() {
-		if info.Name != target.Harness {
-			others = append(others, string(info.Name))
-		}
-	}
-	if len(others) == 0 {
-		return
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "\nAlso detected: %s\nInstall there too with: bmo init everyone\n", strings.Join(others, ", "))
 }
 
 func newInspectCommand() *cobra.Command {
@@ -1318,6 +1323,12 @@ func shouldBootstrap(cmd *cobra.Command, args []string) bool {
 // without it.
 func bootstrapBmoSkillForOptions(cmd *cobra.Command, args []string, opts *options) {
 	if opts.skillsDir != "" || opts.dryRun {
+		return
+	}
+	// init installs the skill itself, to destinations the user chose. Seeding
+	// the default harness first would install somewhere they did not ask for
+	// and announce it above init's own output.
+	if cmd.Name() == "init" {
 		return
 	}
 	harnessName := opts.harness

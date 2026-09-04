@@ -858,24 +858,86 @@ func TestInitEveryoneInstallsToEveryDetectedHarness(t *testing.T) {
 	}
 }
 
-// A machine with no Claude at all still gets Claude as the default target, for
-// backward compatibility. That is defensible only if bmo says so, otherwise the
-// skill lands somewhere the user never looks.
-func TestInitNamesTheHarnessesItDidNotReach(t *testing.T) {
+// A bare `bmo init` installs everywhere. The bundled skill is how a harness
+// learns what bmo is, so defaulting to one harness left every other one unable
+// to explain the tool that had just been pointed at it.
+func TestBareInitInstallsToEveryDetectedHarness(t *testing.T) {
 	home := isolateHome(t)
-	t.Chdir(t.TempDir())
-	if err := os.MkdirAll(filepath.Join(home, ".gemini"), 0o755); err != nil {
-		t.Fatal(err)
+	project := t.TempDir()
+	t.Chdir(project)
+	// Detection is path-based, so an empty PATH keeps this test from picking up
+	// harnesses that happen to be installed on the machine running it.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("BMO_APPLICATIONS_DIRS", t.TempDir())
+	for _, dir := range []string{".claude", ".gemini", ".grok"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var out bytes.Buffer
 	cmd := NewRootCommand()
+	// No harness, no keyword beyond the scope, and no --yes: the bare form.
 	cmd.SetArgs([]string{"init", "here"})
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
 	if err := cmd.Execute(); err != nil {
+		t.Fatalf("bmo init here: %v", err)
+	}
+	for _, dir := range []string{".claude", ".gemini", ".grok"} {
+		if _, err := os.Stat(filepath.Join(project, dir, "skills", "bmo", "SKILL.md")); err != nil {
+			t.Fatalf("bmo skill missing for %s: %v", dir, err)
+		}
+	}
+	// The bundled skill is bmo's own and undone by `bmo remove bmo`, so the
+	// bare form must not stop to ask.
+	if strings.Contains(out.String(), "[y/N]") {
+		t.Fatalf("bare init should not prompt:\n%s", out.String())
+	}
+}
+
+// Naming a harness still means that harness alone, or there would be no way to
+// install into exactly one.
+func TestInitWithNamedHarnessInstallsOnlyThere(t *testing.T) {
+	home := isolateHome(t)
+	t.Chdir(t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("BMO_APPLICATIONS_DIRS", t.TempDir())
+	for _, dir := range []string{".claude", ".gemini"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"init", "gemini"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "gemini") || !strings.Contains(out.String(), "bmo init everyone") {
-		t.Fatalf("init should point at the harnesses it skipped:\n%s", out.String())
+	if _, err := os.Stat(filepath.Join(home, ".gemini", "skills", "bmo", "SKILL.md")); err != nil {
+		t.Fatalf("named harness did not get the skill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "bmo")); !os.IsNotExist(err) {
+		t.Fatalf("naming gemini should not have installed into claude: %v", err)
+	}
+}
+
+// With nothing detected the fan-out has no destinations, and erroring there
+// would make `bmo init` the one command that cannot install its own skill.
+func TestBareInitFallsBackWhenNothingIsDetected(t *testing.T) {
+	home := isolateHome(t)
+	t.Chdir(t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("BMO_APPLICATIONS_DIRS", t.TempDir())
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"init"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("bmo init with nothing detected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "bmo", "SKILL.md")); err != nil {
+		t.Fatalf("fallback destination did not get the skill: %v", err)
 	}
 }

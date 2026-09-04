@@ -50,8 +50,8 @@ bmo share everyone    # give every harness the union of everyone's skills
 bmo remove NAME       # uninstall a skill
 bmo remove NAME universe # delete every copy, every harness, every known project
 bmo doctor            # run diagnostics
-bmo init              # (re)install this bundled bmo skill (claude by default)
-bmo init everyone     # (re)install it into every detected harness
+bmo init              # (re)install this bundled bmo skill into every detected harness
+bmo init grok         # (re)install it into one harness only
 bmo harnesses         # list supported harness presets and paths
 bmo upgrade           # upgrade the bmo binary itself to the latest release
 bmo --version         # show the installed bmo version
