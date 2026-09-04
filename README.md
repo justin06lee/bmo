@@ -29,7 +29,7 @@ bmo add owner/repo gemini         # Gemini CLI's native directory
 bmo add owner/repo everyone       # every detected coding harness
 bmo add owner/repo --skills-dir PATH  # any other coding harness
 
-bmo init       # install the skill bmo ships with
+bmo init       # install the skill bmo ships with, into every detected harness
 bmo add bmo    # ...or restore it if you deleted it
 ```
 
@@ -63,9 +63,9 @@ won't fight you if you later remove it.
 You can also manage it explicitly:
 
 ```bash
-bmo init       # install (or refresh) the bundled bmo skill
-bmo init --harness codex
-bmo add bmo    # the same thing — restore it if you deleted the folder
+bmo init       # install (or refresh) it into every detected harness
+bmo init codex # ...or into one harness only
+bmo add bmo    # the same thing for a single destination
 bmo add self   # alias for `bmo add bmo`
 ```
 
@@ -151,7 +151,8 @@ bmo remove skill-name
 # Run diagnostics
 bmo doctor
 
-# (Re)install the skill bmo ships with — also runs automatically on first use
+# (Re)install the skill bmo ships with, into every detected harness
+# (a first run installs it automatically for whichever harness you aimed at)
 bmo init
 ```
 
@@ -220,7 +221,9 @@ bmo add here owner/repo everyone
 
 ### `init`
 
-Install the `bmo` skill that ships bundled inside the binary.
+Install the `bmo` skill that ships bundled inside the binary. With no harness
+named, it installs into **every detected harness** — the skill is how a harness
+learns what bmo is, so every harness wants it.
 
 ```bash
 bmo init [here|everywhere] [HARNESS|everyone] [--project | --global] [--harness NAME | --skills-dir PATH]
@@ -232,24 +235,28 @@ bmo init [here|everywhere] [HARNESS|everyone] [--project | --global] [--harness 
 | `--global` | Install into the target harness's global directory (the default) |
 | `--harness` | Target a built-in harness preset (default: `claude`) |
 | `--skills-dir` | Target an explicit skills directory |
-| `--yes` | Skip the confirmation `everyone` asks for |
-
-This is the explicit form of the first-run auto-install. It works offline and
-refreshes the skill if it's already installed. `bmo add bmo` does the same thing.
-
-`bmo init everyone` installs the bundled skill into every detected harness at
-once, using the same fan-out and the same preflight as `bmo add SOURCE everyone`:
+| `--yes` | Accepted for symmetry with `add`; init never prompts |
 
 ```bash
-bmo init everyone            # every detected harness, globally
-bmo init here everyone       # every detected harness, in this project
-bmo init grok                # one harness
+bmo init                     # every detected harness, globally
+bmo init here                # every detected harness, in this project
+bmo init grok                # one harness only
+bmo init everyone            # explicit spelling of the default
 ```
 
-Without a harness, `bmo init` targets `claude` — the backward-compatible
-default. On a machine running something else that would put the skill somewhere
-you never look, so init names the other harnesses it detected and points at
-`bmo init everyone`.
+This is the explicit form of the first-run auto-install. It works offline and
+refreshes the skill if it's already installed. `bmo add bmo` does the same thing
+for a single destination.
+
+The fan-out is the same one `bmo add SOURCE everyone` performs, with the same
+detection and the same shared-destination merging. Unlike `add`, it does not ask
+first: the only thing being installed is bmo's own bundled skill — no
+third-party code, nothing executable, idempotent, and undone by `bmo remove
+bmo`. Naming a harness positionally, with `--harness`, or with `--skills-dir`
+narrows it back to that one destination.
+
+If bmo detects no harness at all, `bmo init` falls back to the single default
+destination rather than failing, so it always installs the skill somewhere.
 
 ### `inspect`
 
