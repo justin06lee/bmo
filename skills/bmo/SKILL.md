@@ -1,6 +1,6 @@
 ---
 name: bmo
-description: Use when managing portable coding-agent skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade, scout for existing installs, share skills between harnesses, or target ChatGPT/Codex/Claude/Cursor/Gemini/Copilot/Windsurf/OpenCode/Amp/Cline) or when creating a bmo-compatible SKILL.md package.
+description: Use when managing portable coding-agent skills with the bmo CLI (install, inspect, list, update, remove, doctor, upgrade, scout for existing installs, share skills between harnesses, or target ChatGPT/Codex/Claude/Cursor/Gemini/Copilot/Windsurf/OpenCode/Amp/Cline/Grok) or when creating a bmo-compatible SKILL.md package.
 ---
 
 # bmo
@@ -71,9 +71,13 @@ form remains available for compatibility and is used by `init`, `list`,
 | `opencode` | `.opencode/skills` | `~/.config/opencode/skills` |
 | `amp` | `.agents/skills` | `~/.config/agents/skills` |
 | `cline` | `.cline/skills` | `~/.cline/skills` |
+| `grok` | `.grok/skills` | `~/.grok/skills` or `$GROK_HOME/skills` |
 
 The shared Codex/ChatGPT `.agents/skills` location is also a cross-harness
-convention read by many of the other presets. `chatgpt` resolves to canonical
+convention read by many of the other presets. Grok Build additionally reads the
+`claude` and `cursor` locations unless its `[compat]` config turns them off, so
+a skill installed for those harnesses already reaches it; the `grok` preset
+targets its own `.grok/skills`, which no configuration can switch off. `chatgpt` resolves to canonical
 `codex` metadata so the two names cannot drift. Invoke a skill as `@name` in
 ChatGPT and `$name` in Codex. For any unlisted harness use `--skills-dir PATH`;
 do not combine it with `--harness`.
